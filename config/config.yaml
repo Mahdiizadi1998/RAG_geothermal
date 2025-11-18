@@ -1,0 +1,99 @@
+# RAG Configuration for Geothermal Wells
+extraction:
+  # Chunking strategies
+  chunking:
+    semantic:
+      max_chunk_size: 500
+      overlap: 50
+    table_aware:
+      detect_tables: true
+      preserve_structure: true
+    sentence:
+      min_sentences: 3
+      max_sentences: 10
+  
+  # Parameter extraction patterns
+  patterns:
+    trajectory:
+      md: "(?:MD|Measured Depth|Along Hole|AH)\\s*[:\\(]?\\s*([0-9.]+)\\s*(?:m|meters?)?"
+      tvd: "(?:TVD|True Vertical Depth|Vertical Depth)\\s*[:\\(]?\\s*([0-9.]+)\\s*(?:m|meters?)?"
+      inclination: "(?:Inc|Inclination|Angle)\\s*[:\\(]?\\s*([0-9.]+)\\s*(?:°|deg|degrees?)?"
+    
+    casing:
+      diameter: "(?:([0-9]+)\\s+([0-9]+)/([0-9]+)|([0-9.]+))\\s*(?:\"|inch|in)?"
+      depth: "(?:to|@|at)\\s*([0-9.]+)\\s*(?:m|meters?)"
+    
+    pressure:
+      value: "([0-9.]+)\\s*(?:bar|psi|kPa|MPa)"
+    
+    temperature:
+      value: "([0-9.]+)\\s*(?:°C|°F|C|F|Celsius|Fahrenheit)"
+
+  # Unit conversions
+  units:
+    length:
+      meters_to_feet: 3.28084
+      feet_to_meters: 0.3048
+    diameter:
+      inches_to_meters: 0.0254
+      meters_to_inches: 39.3701
+    pressure:
+      bar_to_psi: 14.5038
+      psi_to_bar: 0.068948
+      kpa_to_bar: 0.01
+      mpa_to_bar: 10.0
+    temperature:
+      # F = C * 9/5 + 32
+      # C = (F - 32) * 5/9
+      celsius_to_fahrenheit_slope: 1.8
+      celsius_to_fahrenheit_intercept: 32
+
+# Validation rules
+validation:
+  trajectory:
+    md_tvd_relationship: "MD >= TVD"  # Measured depth always >= True Vertical Depth
+    inclination_range: [0, 90]  # Degrees from vertical
+    max_depth: 10000  # meters
+    min_depth: 0
+  
+  casing:
+    diameter_range: [0.05, 1.0]  # meters (50mm to 1000mm)
+    wall_thickness_range: [0.005, 0.05]  # meters
+  
+  pressure:
+    reservoir_range: [0, 1000]  # bar
+    wellhead_range: [0, 300]  # bar
+  
+  temperature:
+    range: [0, 300]  # Celsius
+  
+  confidence:
+    min_acceptable: 0.7
+    high_confidence: 0.9
+
+# RAG retrieval settings
+retrieval:
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  vector_db: "chromadb"
+  top_k: 5
+  reranking:
+    enabled: true
+    method: "cross-encoder"
+  
+  hybrid_search:
+    enabled: true
+    keyword_weight: 0.3
+    semantic_weight: 0.7
+
+# LLM settings
+llm:
+  model: "gpt-3.5-turbo"
+  temperature: 0.1
+  max_tokens: 2000
+  fallback_model: "gpt-4"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+  file: "logs/rag_geothermal.log"
