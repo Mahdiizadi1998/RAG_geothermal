@@ -1,0 +1,65 @@
+ollama:
+  host: http://localhost:11434
+  model_qa: llama3
+  model_extraction: llama3
+  model_embedding: nomic-embed-text
+  timeout: 300  # Q&A operations (5 minutes)
+  timeout_summary: 600  # Summary operations (10 minutes)
+  timeout_extraction: 300  # Extraction operations (5 minutes)
+  
+vector_db:
+  type: chromadb
+  path: ./chroma_db
+  distance_metric: cosine
+  
+chunking:
+  # Hybrid chunking: Multiple granularities for better retrieval
+  factual_qa:
+    chunk_size: 1000
+    chunk_overlap: 250
+  technical_extraction:
+    chunk_size: 3500
+    chunk_overlap: 600
+  summary:
+    chunk_size: 3000
+    chunk_overlap: 500
+  # Additional fine-grained chunks for precise retrieval
+  fine_grained:
+    chunk_size: 500
+    chunk_overlap: 150
+  # Additional coarse-grained chunks for context
+  coarse_grained:
+    chunk_size: 5000
+    chunk_overlap: 800
+  enable_hybrid: true  # Enable multi-granularity chunking
+    
+extraction:
+  enable_llm_fallback: true
+  confidence_threshold: 0.7
+  timeout: 300  # 5 minutes for complex extractions
+  
+validation:
+  md_tvd_tolerance: 1.0
+  pipe_id_min_mm: 50
+  pipe_id_max_mm: 1000
+  inclination_max: 90
+  temperature_gradient_min: 20  # °C/km
+  temperature_gradient_max: 40  # °C/km
+  pressure_gradient_min: 9      # kPa/m
+  pressure_gradient_max: 12     # kPa/m
+  well_depth_min: 500           # meters
+  well_depth_max: 5000          # meters
+  
+retrieval:
+  hybrid_weight_dense: 0.7
+  hybrid_weight_sparse: 0.3
+  top_k_qa: 20  # Increased for better context
+  top_k_extraction: 30  # More chunks for comprehensive extraction
+  top_k_summary: 35  # More content for detailed summaries
+  top_k_fine: 15  # For fine-grained retrieval
+  top_k_coarse: 10  # For coarse-grained retrieval
+  
+ui:
+  port: 7860
+  share: false
+  server_name: "0.0.0.0"

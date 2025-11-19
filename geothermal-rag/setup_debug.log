@@ -1,0 +1,372 @@
++ set -e
++ echo ==========================================
+==========================================
++ echo 'RAG for Geothermal Wells - Setup'
+RAG for Geothermal Wells - Setup
++ echo ==========================================
+==========================================
++ echo ''
+
++++ dirname setup.sh
+++ cd ./..
+++ pwd
++ PROJECT_ROOT=/workspaces/RAG_geothermal
++ VENV_DIR=/workspaces/RAG_geothermal/.venv
++ echo 'Project root: /workspaces/RAG_geothermal'
+Project root: /workspaces/RAG_geothermal
++ echo ''
+
++ echo 'Checking Python version...'
+Checking Python version...
+++ python3 --version
+++ grep -oP '(?<=Python )\d+\.\d+'
++ PYTHON_VERSION=3.12
++ REQUIRED_VERSION=3.9
+++ echo 3.12
+++ awk -F. '{printf "%d%02d", $1, $2}'
++ PYTHON_INT=312
+++ echo 3.9
+++ awk -F. '{printf "%d%02d", $1, $2}'
++ REQUIRED_INT=309
++ '[' 312 -ge 309 ']'
++ echo '✓ Python 3.12 detected (>= 3.9 required)'
+✓ Python 3.12 detected (>= 3.9 required)
++ echo ''
+
++ echo 'Setting up virtual environment...'
+Setting up virtual environment...
++ '[' '!' -d /workspaces/RAG_geothermal/.venv ']'
++ echo '✓ Virtual environment already exists'
+✓ Virtual environment already exists
++ source /workspaces/RAG_geothermal/.venv/bin/activate
+++ deactivate nondestructive
+++ '[' -n '' ']'
+++ '[' -n '' ']'
+++ hash -r
+++ '[' -n '' ']'
+++ unset VIRTUAL_ENV
+++ unset VIRTUAL_ENV_PROMPT
+++ '[' '!' nondestructive = nondestructive ']'
+++ '[' linux-gnu = cygwin ']'
+++ '[' linux-gnu = msys ']'
+++ export VIRTUAL_ENV=/workspaces/RAG_geothermal/.venv
+++ VIRTUAL_ENV=/workspaces/RAG_geothermal/.venv
+++ _OLD_VIRTUAL_PATH=/usr/local/rvm/gems/ruby-3.4.1/bin:/usr/local/rvm/gems/ruby-3.4.1@global/bin:/usr/local/rvm/rubies/ruby-3.4.1/bin:/home/codespace/.vscode-remote/data/User/globalStorage/github.copilot-chat/copilotCli:/home/codespace/.vscode-remote/data/User/globalStorage/github.copilot-chat/debugCommand:/vscode/bin/linux-x64/cb1933bbc38d329b3595673a600fab5c7368f0a7/bin/remote-cli:/home/codespace/.local/bin:/home/codespace/.dotnet:/home/codespace/nvm/current/bin:/home/codespace/.php/current/bin:/home/codespace/.python/current/bin:/home/codespace/java/current/bin:/home/codespace/.ruby/current/bin:/home/codespace/.local/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/oryx:/usr/local/go/bin:/go/bin:/usr/local/sdkman/bin:/usr/local/sdkman/candidates/java/current/bin:/usr/local/sdkman/candidates/gradle/current/bin:/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/ant/current/bin:/usr/local/rvm/gems/default/bin:/usr/local/rvm/gems/default@global/bin:/usr/local/rvm/rubies/default/bin:/usr/local/share/rbenv/bin:/usr/local/php/current/bin:/opt/conda/bin:/usr/local/nvs:/usr/local/share/nvm/versions/node/v22.21.1/bin:/usr/local/hugo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/dotnet:/home/codespace/.dotnet/tools:/usr/local/rvm/bin
+++ PATH=/workspaces/RAG_geothermal/.venv/bin:/usr/local/rvm/gems/ruby-3.4.1/bin:/usr/local/rvm/gems/ruby-3.4.1@global/bin:/usr/local/rvm/rubies/ruby-3.4.1/bin:/home/codespace/.vscode-remote/data/User/globalStorage/github.copilot-chat/copilotCli:/home/codespace/.vscode-remote/data/User/globalStorage/github.copilot-chat/debugCommand:/vscode/bin/linux-x64/cb1933bbc38d329b3595673a600fab5c7368f0a7/bin/remote-cli:/home/codespace/.local/bin:/home/codespace/.dotnet:/home/codespace/nvm/current/bin:/home/codespace/.php/current/bin:/home/codespace/.python/current/bin:/home/codespace/java/current/bin:/home/codespace/.ruby/current/bin:/home/codespace/.local/bin:/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/oryx:/usr/local/go/bin:/go/bin:/usr/local/sdkman/bin:/usr/local/sdkman/candidates/java/current/bin:/usr/local/sdkman/candidates/gradle/current/bin:/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/ant/current/bin:/usr/local/rvm/gems/default/bin:/usr/local/rvm/gems/default@global/bin:/usr/local/rvm/rubies/default/bin:/usr/local/share/rbenv/bin:/usr/local/php/current/bin:/opt/conda/bin:/usr/local/nvs:/usr/local/share/nvm/versions/node/v22.21.1/bin:/usr/local/hugo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/share/dotnet:/home/codespace/.dotnet/tools:/usr/local/rvm/bin
+++ export PATH
+++ '[' -n '' ']'
+++ '[' -z '' ']'
+++ _OLD_VIRTUAL_PS1=
+++ PS1='(.venv) '
+++ export PS1
+++ VIRTUAL_ENV_PROMPT='(.venv) '
+++ export VIRTUAL_ENV_PROMPT
+++ hash -r
++ echo '✓ Virtual environment activated'
+✓ Virtual environment activated
++ echo 'Upgrading pip...'
+Upgrading pip...
++ pip install --upgrade pip -q
++ echo ''
+
++ echo 'Checking Ollama installation...'
+Checking Ollama installation...
++ OLLAMA_INSTALLED=false
++ command -v ollama
++ echo '⚠️  Ollama not found. Install from https://ollama.ai/ for full RAG features'
+⚠️  Ollama not found. Install from https://ollama.ai/ for full RAG features
++ echo '   (Setup will continue - core extraction/analysis will work without Ollama)'
+   (Setup will continue - core extraction/analysis will work without Ollama)
++ OLLAMA_RUNNING=false
++ '[' false = true ']'
++ echo ''
+
++ echo 'Installing Python dependencies in virtual environment...'
+Installing Python dependencies in virtual environment...
++ cd /workspaces/RAG_geothermal/geothermal-rag
++ pip install -r requirements.txt
+Requirement already satisfied: gradio>=4.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 2)) (5.49.1)
+Requirement already satisfied: pyyaml>=6.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 3)) (6.0.3)
+Requirement already satisfied: ollama>=0.1.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 6)) (0.6.1)
+Requirement already satisfied: chromadb>=0.4.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 7)) (1.3.5)
+Requirement already satisfied: PyMuPDF>=1.23.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 10)) (1.26.6)
+Requirement already satisfied: spacy>=3.7.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 13)) (3.8.11)
+Requirement already satisfied: sentence-transformers>=2.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 14)) (5.1.2)
+Requirement already satisfied: numpy>=1.24.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 17)) (2.3.5)
+Requirement already satisfied: scipy>=1.11.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 18)) (1.16.3)
+Requirement already satisfied: pandas>=2.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 19)) (2.3.3)
+Requirement already satisfied: tqdm>=4.65.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 22)) (4.67.1)
+Requirement already satisfied: python-dotenv>=1.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from -r requirements.txt (line 23)) (1.2.1)
+Requirement already satisfied: aiofiles<25.0,>=22.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (24.1.0)
+Requirement already satisfied: anyio<5.0,>=3.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (4.11.0)
+Requirement already satisfied: brotli>=1.1.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (1.2.0)
+Requirement already satisfied: fastapi<1.0,>=0.115.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.121.2)
+Requirement already satisfied: ffmpy in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (1.0.0)
+Requirement already satisfied: gradio-client==1.13.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (1.13.3)
+Requirement already satisfied: groovy~=0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.1.2)
+Requirement already satisfied: httpx<1.0,>=0.24.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.28.1)
+Requirement already satisfied: huggingface-hub<2.0,>=0.33.5 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.36.0)
+Requirement already satisfied: jinja2<4.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (3.1.6)
+Requirement already satisfied: markupsafe<4.0,>=2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (3.0.3)
+Requirement already satisfied: orjson~=3.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (3.11.4)
+Requirement already satisfied: packaging in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (25.0)
+Requirement already satisfied: pillow<12.0,>=8.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (11.3.0)
+Requirement already satisfied: pydantic<2.12,>=2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (2.11.10)
+Requirement already satisfied: pydub in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.25.1)
+Requirement already satisfied: python-multipart>=0.0.18 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.0.20)
+Requirement already satisfied: ruff>=0.9.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.14.5)
+Requirement already satisfied: safehttpx<0.2.0,>=0.1.6 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.1.7)
+Requirement already satisfied: semantic-version~=2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (2.10.0)
+Requirement already satisfied: starlette<1.0,>=0.40.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.49.3)
+Requirement already satisfied: tomlkit<0.14.0,>=0.12.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.13.3)
+Requirement already satisfied: typer<1.0,>=0.12 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.20.0)
+Requirement already satisfied: typing-extensions~=4.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (4.15.0)
+Requirement already satisfied: uvicorn>=0.14.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio>=4.0.0->-r requirements.txt (line 2)) (0.38.0)
+Requirement already satisfied: fsspec in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio-client==1.13.3->gradio>=4.0.0->-r requirements.txt (line 2)) (2025.10.0)
+Requirement already satisfied: websockets<16.0,>=13.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from gradio-client==1.13.3->gradio>=4.0.0->-r requirements.txt (line 2)) (15.0.1)
+Requirement already satisfied: python-dateutil>=2.8.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pandas>=2.0.0->-r requirements.txt (line 19)) (2.9.0.post0)
+Requirement already satisfied: pytz>=2020.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pandas>=2.0.0->-r requirements.txt (line 19)) (2025.2)
+Requirement already satisfied: tzdata>=2022.7 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pandas>=2.0.0->-r requirements.txt (line 19)) (2025.2)
+Requirement already satisfied: idna>=2.8 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from anyio<5.0,>=3.0->gradio>=4.0.0->-r requirements.txt (line 2)) (3.11)
+Requirement already satisfied: sniffio>=1.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from anyio<5.0,>=3.0->gradio>=4.0.0->-r requirements.txt (line 2)) (1.3.1)
+Requirement already satisfied: annotated-doc>=0.0.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from fastapi<1.0,>=0.115.2->gradio>=4.0.0->-r requirements.txt (line 2)) (0.0.4)
+Requirement already satisfied: certifi in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from httpx<1.0,>=0.24.1->gradio>=4.0.0->-r requirements.txt (line 2)) (2025.11.12)
+Requirement already satisfied: httpcore==1.* in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from httpx<1.0,>=0.24.1->gradio>=4.0.0->-r requirements.txt (line 2)) (1.0.9)
+Requirement already satisfied: h11>=0.16 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from httpcore==1.*->httpx<1.0,>=0.24.1->gradio>=4.0.0->-r requirements.txt (line 2)) (0.16.0)
+Requirement already satisfied: filelock in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from huggingface-hub<2.0,>=0.33.5->gradio>=4.0.0->-r requirements.txt (line 2)) (3.20.0)
+Requirement already satisfied: requests in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from huggingface-hub<2.0,>=0.33.5->gradio>=4.0.0->-r requirements.txt (line 2)) (2.32.5)
+Requirement already satisfied: hf-xet<2.0.0,>=1.1.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from huggingface-hub<2.0,>=0.33.5->gradio>=4.0.0->-r requirements.txt (line 2)) (1.2.0)
+Requirement already satisfied: annotated-types>=0.6.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pydantic<2.12,>=2.0->gradio>=4.0.0->-r requirements.txt (line 2)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.33.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pydantic<2.12,>=2.0->gradio>=4.0.0->-r requirements.txt (line 2)) (2.33.2)
+Requirement already satisfied: typing-inspection>=0.4.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from pydantic<2.12,>=2.0->gradio>=4.0.0->-r requirements.txt (line 2)) (0.4.2)
+Requirement already satisfied: click>=8.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (8.3.1)
+Requirement already satisfied: shellingham>=1.3.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (1.5.4)
+Requirement already satisfied: rich>=10.11.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (14.2.0)
+Requirement already satisfied: build>=1.0.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.3.0)
+Requirement already satisfied: pybase64>=1.4.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.4.2)
+Requirement already satisfied: posthog<6.0.0,>=2.4.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (5.4.0)
+Requirement already satisfied: onnxruntime>=1.14.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.23.2)
+Requirement already satisfied: opentelemetry-api>=1.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.38.0)
+Requirement already satisfied: opentelemetry-exporter-otlp-proto-grpc>=1.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.38.0)
+Requirement already satisfied: opentelemetry-sdk>=1.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.38.0)
+Requirement already satisfied: tokenizers>=0.13.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (0.22.1)
+Requirement already satisfied: pypika>=0.48.9 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (0.48.9)
+Requirement already satisfied: overrides>=7.3.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (7.7.0)
+Requirement already satisfied: importlib-resources in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (6.5.2)
+Requirement already satisfied: grpcio>=1.58.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (1.76.0)
+Requirement already satisfied: bcrypt>=4.0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (5.0.0)
+Requirement already satisfied: kubernetes>=28.1.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (34.1.0)
+Requirement already satisfied: tenacity>=8.2.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (9.1.2)
+Requirement already satisfied: mmh3>=4.0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (5.2.0)
+Requirement already satisfied: jsonschema>=4.19.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from chromadb>=0.4.0->-r requirements.txt (line 7)) (4.25.1)
+Requirement already satisfied: six>=1.5 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from posthog<6.0.0,>=2.4.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.17.0)
+Requirement already satisfied: backoff>=1.10.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from posthog<6.0.0,>=2.4.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (2.2.1)
+Requirement already satisfied: distro>=1.5.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from posthog<6.0.0,>=2.4.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.9.0)
+Requirement already satisfied: charset_normalizer<4,>=2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from requests->huggingface-hub<2.0,>=0.33.5->gradio>=4.0.0->-r requirements.txt (line 2)) (3.4.4)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from requests->huggingface-hub<2.0,>=0.33.5->gradio>=4.0.0->-r requirements.txt (line 2)) (2.3.0)
+Requirement already satisfied: spacy-legacy<3.1.0,>=3.0.11 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (3.0.12)
+Requirement already satisfied: spacy-loggers<2.0.0,>=1.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (1.0.5)
+Requirement already satisfied: murmurhash<1.1.0,>=0.28.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (1.0.15)
+Requirement already satisfied: cymem<2.1.0,>=2.0.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (2.0.13)
+Requirement already satisfied: preshed<3.1.0,>=3.0.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (3.0.12)
+Requirement already satisfied: thinc<8.4.0,>=8.3.4 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (8.3.10)
+Requirement already satisfied: wasabi<1.2.0,>=0.9.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (1.1.3)
+Requirement already satisfied: srsly<3.0.0,>=2.4.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (2.5.2)
+Requirement already satisfied: catalogue<2.1.0,>=2.0.6 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (2.0.10)
+Requirement already satisfied: weasel<0.5.0,>=0.4.2 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (0.4.3)
+Requirement already satisfied: typer-slim<1.0.0,>=0.3.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (0.20.0)
+Requirement already satisfied: setuptools in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from spacy>=3.7.0->-r requirements.txt (line 13)) (80.9.0)
+Requirement already satisfied: blis<1.4.0,>=1.3.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from thinc<8.4.0,>=8.3.4->spacy>=3.7.0->-r requirements.txt (line 13)) (1.3.3)
+Requirement already satisfied: confection<1.0.0,>=0.0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from thinc<8.4.0,>=8.3.4->spacy>=3.7.0->-r requirements.txt (line 13)) (0.1.5)
+Requirement already satisfied: cloudpathlib<1.0.0,>=0.7.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from weasel<0.5.0,>=0.4.2->spacy>=3.7.0->-r requirements.txt (line 13)) (0.23.0)
+Requirement already satisfied: smart-open<8.0.0,>=5.2.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from weasel<0.5.0,>=0.4.2->spacy>=3.7.0->-r requirements.txt (line 13)) (7.5.0)
+Requirement already satisfied: wrapt in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from smart-open<8.0.0,>=5.2.1->weasel<0.5.0,>=0.4.2->spacy>=3.7.0->-r requirements.txt (line 13)) (2.0.1)
+Requirement already satisfied: transformers<5.0.0,>=4.41.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (4.57.1)
+Requirement already satisfied: torch>=1.11.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (2.9.1)
+Requirement already satisfied: scikit-learn in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (1.7.2)
+Requirement already satisfied: regex!=2019.12.17 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from transformers<5.0.0,>=4.41.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (2025.11.3)
+Requirement already satisfied: safetensors>=0.4.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from transformers<5.0.0,>=4.41.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (0.6.2)
+Requirement already satisfied: pyproject_hooks in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from build>=1.0.3->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.2.0)
+Requirement already satisfied: attrs>=22.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from jsonschema>=4.19.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (25.4.0)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from jsonschema>=4.19.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (2025.9.1)
+Requirement already satisfied: referencing>=0.28.4 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from jsonschema>=4.19.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.37.0)
+Requirement already satisfied: rpds-py>=0.7.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from jsonschema>=4.19.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.29.0)
+Requirement already satisfied: google-auth>=1.0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (2.43.0)
+Requirement already satisfied: websocket-client!=0.40.0,!=0.41.*,!=0.42.*,>=0.32.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.9.0)
+Requirement already satisfied: requests-oauthlib in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (2.0.0)
+Requirement already satisfied: durationpy>=0.7 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.10)
+Requirement already satisfied: cachetools<7.0,>=2.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from google-auth>=1.0.1->kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (6.2.2)
+Requirement already satisfied: pyasn1-modules>=0.2.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from google-auth>=1.0.1->kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.4.2)
+Requirement already satisfied: rsa<5,>=3.1.4 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from google-auth>=1.0.1->kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (4.9.1)
+Requirement already satisfied: pyasn1>=0.1.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from rsa<5,>=3.1.4->google-auth>=1.0.1->kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.6.1)
+Requirement already satisfied: coloredlogs in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (15.0.1)
+Requirement already satisfied: flatbuffers in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (25.9.23)
+Requirement already satisfied: protobuf in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (6.33.1)
+Requirement already satisfied: sympy in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.14.0)
+Requirement already satisfied: importlib-metadata<8.8.0,>=6.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from opentelemetry-api>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (8.7.0)
+Requirement already satisfied: zipp>=3.20 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from importlib-metadata<8.8.0,>=6.0->opentelemetry-api>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (3.23.0)
+Requirement already satisfied: googleapis-common-protos~=1.57 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from opentelemetry-exporter-otlp-proto-grpc>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.72.0)
+Requirement already satisfied: opentelemetry-exporter-otlp-proto-common==1.38.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from opentelemetry-exporter-otlp-proto-grpc>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.38.0)
+Requirement already satisfied: opentelemetry-proto==1.38.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from opentelemetry-exporter-otlp-proto-grpc>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.38.0)
+Requirement already satisfied: opentelemetry-semantic-conventions==0.59b0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from opentelemetry-sdk>=1.2.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.59b0)
+Requirement already satisfied: markdown-it-py>=2.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from rich>=10.11.0->typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from rich>=10.11.0->typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (2.19.2)
+Requirement already satisfied: mdurl~=0.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from markdown-it-py>=2.2.0->rich>=10.11.0->typer<1.0,>=0.12->gradio>=4.0.0->-r requirements.txt (line 2)) (0.1.2)
+Requirement already satisfied: networkx>=2.5.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (3.5)
+Requirement already satisfied: nvidia-cuda-nvrtc-cu12==12.8.93 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.93)
+Requirement already satisfied: nvidia-cuda-runtime-cu12==12.8.90 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.90)
+Requirement already satisfied: nvidia-cuda-cupti-cu12==12.8.90 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.90)
+Requirement already satisfied: nvidia-cudnn-cu12==9.10.2.21 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (9.10.2.21)
+Requirement already satisfied: nvidia-cublas-cu12==12.8.4.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.4.1)
+Requirement already satisfied: nvidia-cufft-cu12==11.3.3.83 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (11.3.3.83)
+Requirement already satisfied: nvidia-curand-cu12==10.3.9.90 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (10.3.9.90)
+Requirement already satisfied: nvidia-cusolver-cu12==11.7.3.90 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (11.7.3.90)
+Requirement already satisfied: nvidia-cusparse-cu12==12.5.8.93 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.5.8.93)
+Requirement already satisfied: nvidia-cusparselt-cu12==0.7.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (0.7.1)
+Requirement already satisfied: nvidia-nccl-cu12==2.27.5 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (2.27.5)
+Requirement already satisfied: nvidia-nvshmem-cu12==3.3.20 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (3.3.20)
+Requirement already satisfied: nvidia-nvtx-cu12==12.8.90 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.90)
+Requirement already satisfied: nvidia-nvjitlink-cu12==12.8.93 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (12.8.93)
+Requirement already satisfied: nvidia-cufile-cu12==1.13.1.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (1.13.1.3)
+Requirement already satisfied: triton==3.5.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from torch>=1.11.0->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (3.5.1)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from sympy->onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.3.0)
+Requirement already satisfied: httptools>=0.6.3 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.18.3->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.7.1)
+Requirement already satisfied: uvloop>=0.15.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.18.3->chromadb>=0.4.0->-r requirements.txt (line 7)) (0.22.1)
+Requirement already satisfied: watchfiles>=0.13 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from uvicorn[standard]>=0.18.3->chromadb>=0.4.0->-r requirements.txt (line 7)) (1.1.1)
+Requirement already satisfied: humanfriendly>=9.1 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from coloredlogs->onnxruntime>=1.14.1->chromadb>=0.4.0->-r requirements.txt (line 7)) (10.0)
+Requirement already satisfied: oauthlib>=3.0.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from requests-oauthlib->kubernetes>=28.1.0->chromadb>=0.4.0->-r requirements.txt (line 7)) (3.3.1)
+Requirement already satisfied: joblib>=1.2.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from scikit-learn->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (1.5.2)
+Requirement already satisfied: threadpoolctl>=3.1.0 in /workspaces/RAG_geothermal/.venv/lib/python3.12/site-packages (from scikit-learn->sentence-transformers>=2.2.0->-r requirements.txt (line 14)) (3.6.0)
++ echo ''
+
++ echo 'Downloading spaCy language model to virtual environment...'
+Downloading spaCy language model to virtual environment...
++ python -m spacy download en_core_web_sm
+Collecting en-core-web-sm==3.8.0
+  Downloading https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl (12.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.8/12.8 MB 35.8 MB/s  0:00:00
+[38;5;2m✔ Download and installation successful[0m
+You can now load the package via spacy.load('en_core_web_sm')
++ '[' false = true ']'
++ echo ''
+
++ echo 'Creating necessary directories...'
+Creating necessary directories...
++ mkdir -p /workspaces/RAG_geothermal/geothermal-rag/chroma_db
++ echo '✓ Created chroma_db directory'
+✓ Created chroma_db directory
++ echo ''
+
++ echo 'Running system tests...'
+Running system tests...
++ cd /workspaces/RAG_geothermal/geothermal-rag
++ python test_system.py
+============================================================
+RAG for Geothermal Wells - System Tests
+============================================================
+Testing imports...
+✓ IngestionAgent
+✓ PreprocessingAgent
+✓ RAGRetrievalAgent
+✓ ParameterExtractionAgent
+✓ ValidationAgent
+✓ NodalAnalysisModel
+✓ PatternLibrary
+✓ UnitConverter
+
+All imports successful!
+
+Testing PatternLibrary...
+✓ Extracted 3 trajectory points
+  MD: 100.0, TVD: 100.0, Inc: 0.5
+  MD: 500.5, TVD: 495.2, Inc: 2.3
+  MD: 1000.0, TVD: 980.5, Inc: 5.1
+
+✓ Extracted 2 casing strings
+  OD: 13.375", 650.0-1500.0m, ID: 12.615"
+  OD: 9.625", 1500.0-2500.0m, ID: 8.535"
+
+Testing UnitConverter...
+✓ 13 3/8" = 13.375"
+✓ 9 5/8" = 9.625"
+✓ 7" = 7.0"
+
+✓ 13.375" = 0.3397m
+✓ MD/TVD validation working
+✓ Pipe ID validation working
+
+Testing NodalAnalysisModel...
+✓ Hydrostatic pressure: 196.2 bar
+✓ Estimated flow rate: 63.6 m³/h
+
+✓ Pressure profile calculated
+  Wellhead: 1.0 bar
+  Bottomhole: 191.5 bar
+  Gain: 190.5 bar
+
+============================================================
+All tests completed successfully! ✓
+============================================================
+
+Next steps:
+1. Install dependencies: pip install -r requirements.txt
+2. Download spaCy model: python -m spacy download en_core_web_sm
+3. Pull Ollama models: ollama pull llama3 && ollama pull nomic-embed-text
+4. Run the application: python app.py
++ echo ''
+
++ echo ==========================================
+==========================================
++ echo 'Setup completed successfully! ✓'
+Setup completed successfully! ✓
++ echo ==========================================
+==========================================
++ echo ''
+
++ '[' false = false ']'
++ echo '⚠️  OLLAMA NOT INSTALLED - Limited functionality:'
+⚠️  OLLAMA NOT INSTALLED - Limited functionality:
++ echo ''
+
++ echo '   ✓ Core extraction/analysis works (run: python demo.py)'
+   ✓ Core extraction/analysis works (run: python demo.py)
++ echo '   ✗ RAG features disabled (PDF indexing, semantic search, LLM Q&A)'
+   ✗ RAG features disabled (PDF indexing, semantic search, LLM Q&A)
++ echo ''
+
++ echo '   To enable full functionality:'
+   To enable full functionality:
++ echo '   1. Install Ollama: https://ollama.ai/'
+   1. Install Ollama: https://ollama.ai/
++ echo '   2. Start Ollama: ollama serve'
+   2. Start Ollama: ollama serve
++ echo '   3. Pull models: ollama pull llama3 && ollama pull nomic-embed-text'
+   3. Pull models: ollama pull llama3 && ollama pull nomic-embed-text
++ echo '   4. Run app: python app.py'
+   4. Run app: python app.py
++ echo ''
+
++ echo 'Virtual environment location: /workspaces/RAG_geothermal/.venv'
+Virtual environment location: /workspaces/RAG_geothermal/.venv
++ echo ''
+
++ echo 'To use the application, activate the virtual environment first:'
+To use the application, activate the virtual environment first:
++ echo '  source /workspaces/RAG_geothermal/.venv/bin/activate'
+  source /workspaces/RAG_geothermal/.venv/bin/activate
++ echo ''
+
++ echo 'Then run:'
+Then run:
++ echo '  Core functionality test (no Ollama): python demo.py'
+  Core functionality test (no Ollama): python demo.py
++ echo '  Full application (requires Ollama): python app.py'
+  Full application (requires Ollama): python app.py
++ echo ''
+
++ echo 'The Gradio UI will be available at:'
+The Gradio UI will be available at:
++ echo '  http://localhost:7860'
+  http://localhost:7860
++ echo ''
+

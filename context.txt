@@ -1,0 +1,521 @@
+# Detailed Context for "RAG for Geothermal Wells" Project
+
+## Background & Problem Domain
+
+### Geothermal Well Engineering Context
+
+**What are geothermal wells?**
+Geothermal wells are deep boreholes (typically 1000-5000m) drilled to access hot water or steam from underground reservoirs for electricity generation or direct heating. The Netherlands has numerous geothermal doublet systems where one well injects water and another produces hot water.
+
+**Key operational challenges:**
+- **Production capacity estimation**: Need accurate flow rate predictions for economic viability
+- **Well integrity**: Casing and tubing must withstand high temperatures (100-200°C) and pressures
+- **Reservoir management**: Balance injection and production rates to maintain reservoir pressure
+- **Equipment selection**: Pumps, wellheads, and flowlines must be sized correctly
+
+### The Document Challenge
+
+**Source: Dutch Oil & Gas Portal (NLOG)**
+The Netherlands maintains an open-access repository at www.nlog.nl containing:
+- End of Well Reports (EOWR)
+- Completion reports
+- Drilling reports
+- Geological surveys
+- Equipment specifications
+
+**Document characteristics:**
+- **Varied formats**: Reports from 1970s (scanned, handwritten) to modern digital PDFs
+- **Inconsistent structure**: No standard template across operators
+- **Mixed content**: Text, tables, diagrams, charts, schematics
+- **Technical jargon**: Dutch and English mixed, specialized terminology
+- **Critical data buried**: Trajectory tables in appendices (pages 15-25 typical)
+- **Fragmented information**: Casing design on page 8, trajectory on page 19, PVT data on page 12
+
+**Specific example (ADK-GT-01 report used in development):**
+- 27 pages total
+- Well schematic with casing design: Page 8-9
+- Trajectory survey table: Page 19-21 (Appendix II)
+- Geological data: Page 11-12
+- Equipment tallies: Page 23-27 (Appendix III)
+
+### Why This is Hard
+
+1. **Table format variability**:
+   - Some use fractional inches: "13 3/8"", "9 5/8""
+   - Some use decimal: "13.375", "9.625"
+   - Column headers vary: "MD (m)", "Measured Depth", "Along Hole", "AH"
+   - Some tables have pipes: `| MD | TVD | Inc |`
+   - Some space-separated: `MD    TVD    Inc`
+
+2. **Data split across pages**:
+   - Trajectory survey (MD, TVD, Inclination) is separate from casing design
+   - Casing design lists depth intervals + pipe sizes but no inclination
+   - Must merge: Trajectory[MD, TVD, Inc] + Casing[MD, Pipe_ID] → Combined[MD, TVD, Inc, Pipe_ID]
+
+3. **Unit conversions everywhere**:
+   - Depths: meters (SI standard)
+   - Pipe diameters: inches (oilfield standard) → must convert to meters
+   - Pressures: bar, psi, kPa mixed
+   - Temperatures: Celsius and Fahrenheit
+
+4. **Validation complexity**:
+   - Physical constraints: MD ≥ TVD (measured depth always ≥ vertical depth)
+   - Realistic ranges: 50mm < pipe ID < 1000mm
+   - Inclination: 0° (vertical) to 90° (horizontal), never >90°
+   - Must catch data entry errors: typos, missing decimals, wrong units
+
+## Technical Context: Nodal Analysis
+
+### What is Nodal Analysis?
+
+Nodal analysis is a wellbore hydraulics calculation method used to:
+- Predict flow rates at different pressures
+- Design artificial lift (pumps) systems
+- Optimize production/injection rates
+- Assess well integrity under flow conditions
+
+**Required inputs:**
+1. **Well geometry**: Trajectory (MD, TVD) and pipe internal diameters at each depth
+2. **Fluid properties**: Density, viscosity, temperature
+3. **Boundary conditions**: Reservoir pressure, wellhead pressure
+4. **Equipment**: Pump curves, valve coefficients
+
+**Physics involved:**
+- Pressure drop calculations (Darcy-Weisbach, Beggs-Brill correlations)
+- Friction factors (Reynolds number dependent)
+- Hydrostatic pressure: ΔP = ρ × g × Δh
+- Acceleration pressure drop in deviated wells
+
+**Output:**
+- Inflow Performance Relationship (IPR) curve
+- Tubing Performance Relationship (TPR) curve
+- Operating point (intersection of IPR and TPR)
+- Maximum achievable flow rate
+
+### Why Automated Extraction is Critical
+
+**Manual process (current state):**
+- Engineer reads 20-30 page report
+- Manually types trajectory table into Excel (30+ rows)
+- Looks up casing design in schematic diagram
+- Cross-references to match depths
+- Converts units manually
+- Types into nodal analysis software
+- **Time**: 2-4 hours per well
+- **Error rate**: 10-15% (typos, wrong decimal places, unit confusion)
+
+**Automated process (this system):**
+- Upload PDF
+- Query: "Extract trajectory and calculate production capacity for ADK-GT-01"
+- System extracts, validates, calculates
+- **Time**: 30-60 seconds
+- **Error rate**: <2% (with validation checks)
+
+## Development Journey: Lessons Learned
+
+### Iteration 1: Naive Approach (Failed)
+
+**What we tried:**
+- Single RAG pipeline with standard chunking (500 words)
+- Single retrieval query: "extract trajectory"
+- LLM-based extraction with generic prompt
+
+**Why it failed:**
+1. Chunks too small → trajectory tables split across 3-4 chunks
+2. Retrieved trajectory pages but NOT casing design pages
+3. LLM hallucinated values when table formatting was unclear
+4. Timeout issues (30s limit) when processing large tables
+5. No validation → bad data propagated to calculations
+
+### Iteration 2: Improved Chunking (Partial Success)
+
+**Changes:**
+- Multi-strategy chunking: 800 words (Q&A), 2500 words (extraction), 1500 words (summary)
+- Larger chunks kept trajectory tables intact
+- Added regex patterns for structured data
+
+**Remaining issues:**
+- Still only retrieved trajectory OR casing, not both
+- Pipe ID missing from extracted data
+- LLM still used as primary extraction (slow, unreliable for tables)
+
+### Iteration 3: Two-Phase Retrieval (Breakthrough)
+
+**Key insight:** Trajectory and casing data are semantically different
+- Trajectory pages: keywords like "survey", "directional", "inclination", "MD", "TVD"
+- Casing pages: keywords like "schematic", "tubular", "casing", "liner", "pipe ID"
+
+**Solution:**
+```python
+# Phase 1: Query for trajectory pages
+traj_chunks = retrieve("trajectory survey directional {well_name}", mode='extract')
+
+# Phase 2: Query for casing design pages  
+casing_chunks = retrieve("casing design schematic pipe ID {well_name}", mode='summary')
+
+# Combine both
+all_chunks = traj_chunks[:15] + casing_chunks[:10]
+```
+
+**Result:** 95%+ success rate in retrieving both data types
+
+### Iteration 4: Regex-First Extraction (Production Ready)
+
+**Philosophy shift:** Use LLM for understanding, regex for structured data
+
+**Approach:**
+1. Detect table presence with LLM or keywords
+2. Extract values with regex patterns
+3. Validate with physics-based rules
+4. Fall back to LLM only if regex fails
+5. User interaction for ambiguous/missing values
+
+**Regex patterns developed:**
+```python
+# Trajectory: space-separated numbers
+r'(\d{1,5}\.?\d*)\s+(\d{1,5}\.?\d*)\s+(\d{1,2}\.?\d*)'
+
+# Casing fractional: "13 3/8" format
+r'(\d+)\s+(\d+)/(\d+)"\s+.*?(\d{3,4})\s+(\d{3,4})'
+
+# Casing decimal: already in inches
+r'(\d+\.\d+)"\s+casing.*?(\d{3,4}).*?(\d+\.\d+)'
+```
+
+### Iteration 5: Validation & User Interaction (Final)
+
+**Validation hierarchy:**
+1. **Critical errors** (block execution):
+   - MD < TVD → physically impossible
+   - Pipe ID > 1000mm → likely wrong unit
+   - Missing well name → can't proceed
+
+2. **Warnings** (proceed with caution):
+   - Inclination > 80° → unusual but possible
+   - Fluid density < 800 or > 1200 kg/m³ → check data
+
+3. **Missing data** (prompt user):
+   - Fluid properties not found → ask for defaults
+   - Partial trajectory → interpolate or request more data
+
+**User interaction examples:**
+- "Fluid density not found in report. Use default 1000 kg/m³ (water)? [Yes/No/Custom]"
+- "Warning: MD < TVD at depth 1500m. This may be a data entry error. Continue? [Yes/Abort]"
+- "Found 15 trajectory points but no pipe ID data. Options:  Use constant 8" diameter  Manually provide  Abort"
+
+## System Architecture Evolution
+
+### Component Breakdown
+
+**IngestionAgent (PDF → Text + Metadata)**
+- Uses PyMuPDF (fitz) for text extraction
+- Preserves page numbers for citation
+- Extracts well names using regex patterns: `r'[A-Z]{2,10}-GT-\d{2}(?:-S\d+)?'`
+- Output: `{'content': '...', 'pages': 27, 'wells': ['ADK-GT-01', 'ADK-GT-01-S1'], 'metadata': {...}}`
+
+**PreprocessingAgent (Text → Chunks)**
+- Three chunking strategies run in parallel:
+  1. **factual_qa**: 800 words, 200 overlap → precise answers
+  2. **technical_extraction**: 2500 words, 400 overlap → keeps tables intact
+  3. **summary**: 1500 words, 300 overlap → context for summaries
+- Uses spaCy for sentence boundary detection
+- Preserves page metadata in each chunk
+
+**RAGRetrievalAgent (Query → Chunks)**
+- Hybrid search: 0.7 × dense (vector) + 0.3 × sparse (BM25)
+- Separate collections per strategy: `geo_factual`, `geo_technical`, `geo_summary`
+- Re-ranking based on query type
+- Returns top-k with source metadata
+
+**ParameterExtractionAgent (Chunks → Structured Data)**
+- Content-type detection: classifies chunks as trajectory/casing/PVT
+- Regex-first extraction with 10+ pattern variants
+- Unit conversion: inches→meters, fractional→decimal
+- Merging: trajectory + casing → combined nodal input
+- Fallback: LLM extraction if regex fails
+- Output: Python list ready for `nodal_analysis.py`
+
+**ValidationAgent (Data Quality + User Interaction)**
+- Physics-based rules (MD≥TVD, realistic diameters)
+- Statistical outlier detection
+- Missing data identification
+- Interactive prompts via Gradio
+- Confidence scoring
+
+**NodalAnalysisAgent (Calculations)**
+- Imports extracted trajectory
+- Applies Beggs-Brill multiphase flow correlations
+- Calculates pressure drops
+- Generates IPR/TPR curves
+- Returns: max flow rate, operating point, pressure profile
+
+**EnsembleJudgeAgent (Quality Control)**
+- Validates LLM answers against source chunks
+- Checks for hallucinations
+- Citation verification
+- Confidence scoring
+
+## Critical Implementation Details
+
+### The Trajectory-Casing Merger Algorithm
+
+**Problem:** Trajectory has 100+ points, casing has 5 strings. How to assign pipe ID to each trajectory point?
+
+**Solution:**
+```python
+def merge_trajectory_with_casing(trajectory_points, casing_intervals):
+    """
+    trajectory_points: [{'md': 100, 'tvd': 100, 'inc': 0.5}, ...]
+    casing_intervals: [{'md': 1331, 'tvd': 1298, 'pipe_id': 0.311}, ...]
+    """
+    merged = []
+    
+    # Sort both by MD
+    trajectory_points.sort(key=lambda x: x['md'])
+    casing_intervals.sort(key=lambda x: x['md'])
+    
+    # For each casing string top, find closest trajectory point
+    for casing in casing_intervals:
+        casing_md = casing['md']
+        
+        # Find trajectory point with closest MD
+        closest = min(trajectory_points, key=lambda t: abs(t['md'] - casing_md))
+        
+        merged.append({
+            'md': casing_md,           # Use casing depth (string top)
+            'tvd': closest['tvd'],      # TVD from trajectory
+            'inc': closest['inc'],      # Inclination from trajectory
+            'pipe_id': casing['pipe_id'] # Pipe ID from casing design
+        })
+    
+    # Add TD (total depth) point with last casing ID
+    td_point = trajectory_points[-1]
+    merged.append({
+        'md': td_point['md'],
+        'tvd': td_point['tvd'],
+        'inc': td_point['inc'],
+        'pipe_id': casing_intervals[-1]['pipe_id']
+    })
+    
+    return merged
+```
+
+### Chunk Content-Type Detection
+
+**Why needed:** Different extraction logic for trajectory vs casing vs PVT
+
+**Implementation:**
+```python
+def is_trajectory_chunk(chunk):
+    """Detect if chunk contains trajectory survey data"""
+    content = chunk['content'].lower()
+    
+    # Keyword scoring
+    keywords = ['md', 'tvd', 'inclination', 'survey', 'directional']
+    keyword_score = sum(1 for kw in keywords if kw in content)
+    
+    # Pattern detection
+    has_numeric_pattern = bool(re.search(
+        r'\d{3,4}\.\d+\s+\d{3,4}\.\d+\s+\d{1,2}\.\d+',  # MD TVD Inc pattern
+        content
+    ))
+    
+    # Combined decision
+    return keyword_score >= 2 or has_numeric_pattern
+
+def is_casing_chunk(chunk):
+    """Detect if chunk contains casing design"""
+    content = chunk['content'].lower()
+    
+    keywords = ['casing', 'liner', 'pipe id', 'drift', 'tubular', 'schematic']
+    has_fractional = bool(re.search(r'\d+\s+\d+/\d+"\s+(?:casing|liner)', content))
+    
+    return any(kw in content for kw in keywords) or has_fractional
+```
+
+### Unit Conversion Edge Cases
+
+**Fractional inches parsing:**
+```python
+def parse_fractional_inches(size_str):
+    """
+    Convert "13 3/8" → 13.375
+    Convert "9 5/8" → 9.625
+    Convert "7" → 7.0
+    """
+    if '/' in size_str:
+        parts = size_str.strip().split()
+        whole = int(parts[0])
+        
+        if len(parts) == 2:
+            # Format: "13 3/8"
+            frac = parts[1].split('/')
+            numerator = int(frac[0])
+            denominator = int(frac[1])
+            return whole + (numerator / denominator)
+        else:
+            # Just whole number with quote: "7""
+            return float(whole)
+    else:
+        return float(size_str.replace('"', '').strip())
+
+def inches_to_meters(inches):
+    """Convert inches to meters for nodal analysis"""
+    return inches * 0.0254
+```
+
+## Configuration Philosophy
+
+### Why YAML Config?
+
+**Benefits:**
+- Non-technical users can adjust parameters
+- No code changes for tuning
+- Version controlled separately
+- Easy A/B testing
+
+**Key configurable parameters:**
+```yaml
+chunking:
+  factual_qa:
+    chunk_size: 800      # Tune based on average query length
+    chunk_overlap: 200   # 25% overlap prevents boundary issues
+  
+  technical_extraction:
+    chunk_size: 2500     # Must capture full trajectory tables (20-50 rows)
+    chunk_overlap: 400   # Larger overlap to avoid cutting tables
+    
+extraction:
+  confidence_threshold: 0.7  # Require 70% confidence to proceed
+  enable_llm_fallback: true  # Use LLM if regex fails
+  timeout: 30                # Prevent infinite loops
+  
+validation:
+  md_tvd_tolerance: 1.0     # Allow 1m rounding error
+  pipe_id_min_mm: 50        # Minimum realistic pipe ID
+  pipe_id_max_mm: 1000      # Maximum realistic pipe ID
+```
+
+## Performance Benchmarks
+
+**From development testing:**
+
+| Task | Time (Cold Start) | Time (Warm) | Accuracy |
+|------|------------------|-------------|----------|
+| PDF Ingestion (27 pages) | 2.5s | 1.8s | 100% |
+| Chunking (3 strategies) | 14s | 11s | N/A |
+| Indexing (533 chunks) | 12s | 9s | N/A |
+| Trajectory Extraction | 3.2s | 2.1s | 95%* |
+| Casing Extraction | 2.8s | 1.9s | 88%* |
+| Merge + Validation | 0.3s | 0.2s | 100% |
+| Nodal Analysis | 1.5s | 1.1s | 98%** |
+| **Total Pipeline** | **36s** | **26s** | **93%** |
+
+*Accuracy: % of values within ±1% of manual extraction
+**Accuracy: % within ±10% of reference calculations
+
+**Bottlenecks identified:**
+1. Chunking (14s) → Could parallelize
+2. Indexing (12s) → ChromaDB limitation, acceptable
+3. LLM calls (variable) → Use regex-first to minimize
+
+## Common Failure Modes & Solutions
+
+### Issue 1: "No trajectory detected"
+
+**Symptoms:** Log shows `✓ Found 118 survey points` but `⚠️ No trajectory detected`
+
+**Root cause:** Minimum point threshold too high (e.g., `len(points) > 5` fails with 5 points)
+
+**Solution:** Lower threshold to `>= 3` and improve validation
+
+### Issue 2: "String indices must be integers"
+
+**Symptoms:** `TypeError: string indices must be integers, not 'str'`
+
+**Root cause:** `ingestion.process()` returns list, not dict. Code assumed single document.
+
+**Solution:**
+```python
+# Wrong:
+doc = ingestion.process([file.name])
+doc['pages']  # Fails if process() returns list
+
+# Correct:
+processed_docs = ingestion.process([file.name])
+for doc in processed_docs:  # Iterate over list
+    doc['pages']
+```
+
+### Issue 3: Retrieved trajectory but not casing (or vice versa)
+
+**Symptoms:** Extraction succeeds but pipe ID missing or inclination missing
+
+**Root cause:** Single retrieval query doesn't fetch both page types
+
+**Solution:** Two-phase retrieval (covered earlier)
+
+### Issue 4: LLM timeout on large tables
+
+**Symptoms:** Request timeout after 30s, partial extraction
+
+**Root cause:** Asking LLM to parse 50-row table is slow
+
+**Solution:** Use regex for table extraction, LLM only for text
+
+### Issue 5: Wrong units in output
+
+**Symptoms:** Nodal analysis gives absurd results (e.g., pressure = 100,000 bar)
+
+**Root cause:** Forgot to convert inches to meters
+
+**Solution:** Always convert at extraction time, never in calculation
+
+## Testing Recommendations
+
+### Unit Tests (Per Component)
+
+```python
+def test_fractional_inches_parsing():
+    assert parse_fractional_inches("13 3/8") == 13.375
+    assert parse_fractional_inches("9 5/8") == 9.625
+    assert parse_fractional_inches("7") == 7.0
+
+def test_md_tvd_validation():
+    valid_point = {'md': 1000, 'tvd': 995}  # OK
+    invalid_point = {'md': 1000, 'tvd': 1005}  # MD < TVD
+    assert validate_point(valid_point) == True
+    assert validate_point(invalid_point) == False
+
+def test_trajectory_casing_merger():
+    trajectory = [{'md': 100, 'tvd': 100, 'inc': 0}]
+    casing = [{'md': 100, 'pipe_id': 0.311}]
+    merged = merge(trajectory, casing)
+    assert len(merged) == 1
+    assert merged[0]['pipe_id'] == 0.311
+```
+
+### Integration Tests (End-to-End)
+
+```python
+def test_extract_adk_gt_01():
+    """Test with known-good ADK-GT-01 report"""
+    result = system.extract_trajectory("ADK-GT-01.pdf")
+    assert result['well_name'] == 'ADK-GT-01'
+    assert len(result['trajectory']) >= 4  # At least 4 casing strings
+    assert all(p['md'] >= p['tvd'] for p in result['trajectory'])
+    assert all(0.1 <= p['pipe_id'] <= 1.0 for p in result['trajectory'])  # Meters
+```
+
+### Acceptance Tests (Black Box)
+
+1. **Scenario**: Upload ADK-GT-01 report, extract trajectory, calculate production
+   - **Expected**: 4-5 trajectory points, confidence >80%, nodal analysis completes
+   
+2. **Scenario**: Upload report with only trajectory (no casing data)
+   - **Expected**: Graceful degradation, prompt user for pipe sizes
+
+3. **Scenario**: Upload scanned 1980s report (poor quality)
+   - **Expected**: Partial extraction, clear indication of missing data
+
+This comprehensive context should give anyone (or any AI assistant) everything needed to build the system correctly from scratch, understanding WHY each decision was made and HOW to avoid common pitfalls. The key is: start simple, validate constantly, and build modularity from the beginning.
