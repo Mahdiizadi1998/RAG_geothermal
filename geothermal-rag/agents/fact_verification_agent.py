@@ -34,11 +34,12 @@ class OverallVerification:
 
 
 class FactVerificationAgent:
-    """Verifies factual claims against source documents using LLM"""
+    """Verifies factual claims against source documents using database + LLM"""
     
-    def __init__(self, config: Dict[str, Any], ollama_host: str = "http://localhost:11434"):
+    def __init__(self, config: Dict[str, Any], database_manager=None, ollama_host: str = "http://localhost:11434"):
         self.config = config
         self.ollama_host = ollama_host
+        self.db = database_manager  # Database for exact numerical verification
         
         # Model selection
         ollama_config = config.get('ollama', {})
@@ -50,7 +51,16 @@ class FactVerificationAgent:
         self.min_support_rate = validation_config.get('min_support_rate', 0.8)  # 80% claims must be supported
         self.min_confidence = validation_config.get('min_confidence', 0.7)  # 70% confidence threshold
         
-        logger.info(f"Fact verification using {self.model}, thresholds: support≥{self.min_support_rate*100}%, confidence≥{self.min_confidence*100}%")
+        # Patterns for numerical claims that should be verified against database
+        self.numerical_patterns = [
+            r'\d+(?:\.\d+)?\s*(?:m|ft|meter|feet|inch|in|")',  # Depths, sizes
+            r'\d+(?:\.\d+)?\s*(?:lb/ft|kg/m|ppf)',  # Weights
+            r'\d+\s+\d+/\d+',  # Fractions (casing sizes)
+            r'TD|TVD|total depth|true vertical',  # Depth references
+            r'OD|ID|outer diameter|inner diameter|pipe\s+id',  # Diameter references
+        ]
+        
+        logger.info(f"Fact verification using {self.model} + database, thresholds: support≥{self.min_support_rate*100}%, confidence≥{self.min_confidence*100}%")
     
     def verify(self, answer: str, source_chunks: List[Dict]) -> OverallVerification:
         """
@@ -167,9 +177,87 @@ class FactVerificationAgent:
         
         return claims
     
+    def _check_claim_in_database(self, claim: str) -> Optional[Tuple[bool, str]]:
+        """
+        Check if claim contains numerical data that can be verified against database
+        
+        Returns:
+            Tuple of (is_supported, explanation) if database check applicable, None otherwise
+        """
+        if not self.db:
+            return None
+        
+        # Check if claim contains numerical patterns
+        has_numerical = any(re.search(pattern, claim, re.IGNORECASE) 
+                           for pattern in self.numerical_patterns)
+        
+        if not has_numerical:
+            return None  # Not a numerical claim, use semantic verification
+        
+        # Extract well name from claim
+        well_pattern = re.compile(r'\b([A-Z]{2,10}-GT-\d{2}(?:-S\d+)?)\b')
+        well_match = well_pattern.search(claim)
+        
+        if not well_match:
+            return None  # No well name, can't query database
+        
+        well_name = well_match.group(1)
+        
+        try:
+            # Get well data from database
+            well_data = self.db.get_well_summary(well_name)
+            
+            if not well_data or not well_data.get('well_info'):
+                return None  # No data in database
+            
+            # Convert claim and database data to comparable format
+            claim_lower = claim.lower()
+            
+            # Check various technical data points
+            well_info = well_data['well_info']
+            casing_strings = well_data.get('casing_strings', [])
+            
+            # Simple heuristic checks (can be made more sophisticated)
+            verified = False
+            explanation = ""
+            
+            # Check TD/TVD
+            if 'total depth' in claim_lower or 'td' in claim_lower:
+                td_md = well_info.get('total_depth_md')
+                if td_md:
+                    # Extract depth from claim
+                    depth_match = re.search(r'(\d+(?:\.\d+)?)\s*m', claim)
+                    if depth_match:
+                        claimed_depth = float(depth_match.group(1))
+                        # Allow 1% tolerance
+                        if abs(claimed_depth - td_md) / td_md < 0.01:
+                            verified = True
+                            explanation = f"Total depth {td_md}m matches database"
+            
+            # Check casing sizes
+            if 'casing' in claim_lower or 'od' in claim_lower:
+                for casing in casing_strings:
+                    od = casing.get('outer_diameter')
+                    if od:
+                        od_str = str(od)
+                        if od_str in claim or f"{od:.3f}" in claim:
+                            verified = True
+                            explanation = f"Casing OD {od}\" found in database"
+                            break
+            
+            if verified:
+                return (True, explanation)
+            else:
+                # Database has data but claim not verified
+                return (False, "Numerical claim not found in database records")
+                
+        except Exception as e:
+            logger.warning(f"Database verification error: {str(e)}")
+            return None
+    
     def _verify_claim(self, claim: str, source_chunks: List[Dict]) -> VerificationResult:
         """
-        Verify a single claim against source chunks using LLM
+        Verify a single claim against database (priority) and source chunks using LLM
         
         Args:
             claim: Factual claim to verify
@@ -178,6 +266,20 @@ class FactVerificationAgent:
         Returns:
             VerificationResult with support assessment
         """
+        # First, try database verification for numerical claims
+        db_result = self._check_claim_in_database(claim)
+        if db_result is not None:
+            is_supported, explanation = db_result
+            logger.info(f"Database verification: {claim[:60]}... → {'✓' if is_supported else '✗'}")
+            return VerificationResult(
+                claim=claim,
+                is_supported=is_supported,
+                confidence=0.95 if is_supported else 0.85,  # High confidence from database
+                supporting_sources=["Database"],
+                explanation=f"[DB] {explanation}"
+            )
+        
+        # Fall back to semantic verification via LLM
         # Build context from source chunks
         context_parts = []
         for i, chunk in enumerate(source_chunks[:10], 1):  # Use top 10 sources

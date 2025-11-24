@@ -12,6 +12,11 @@ import logging
 from PIL import Image
 import io
 
+# Suppress pdfminer warnings about invalid color values
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='pdfminer')
+logging.getLogger('pdfminer.pdfinterp').setLevel(logging.ERROR)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -358,6 +363,7 @@ class IngestionAgent:
     def process_and_store_tables(self, pdf_path: str, well_names: List[str]) -> int:
         """
         Extract tables from PDF, parse them, and store in database
+        Uses EnhancedTableParser for comprehensive data extraction
         
         Args:
             pdf_path: Path to PDF file
@@ -379,6 +385,7 @@ class IngestionAgent:
         
         tables = self.extract_tables(pdf_path)
         stored_count = 0
+        general_data_stored = False
         
         for table in tables:
             try:
@@ -396,8 +403,26 @@ class IngestionAgent:
                 
                 logger.debug(f"Table on page {table['page']}: type={table_type}")
                 
+                # Skip excluded tables (geological logs, etc.)
+                if table_type == 'excluded':
+                    logger.debug(f"  Skipped excluded table on page {table['page']}")
+                    continue
+                
                 # Parse and store based on type
-                if table_type == 'casing':
+                if table_type == 'general_data' and not general_data_stored:
+                    general_data = self.table_parser.parse_general_data_table(
+                        table['headers'],
+                        table['rows'],
+                        table['page']
+                    )
+                    if general_data:
+                        # Update well with general data
+                        self.db.add_or_get_well(primary_well, **general_data)
+                        stored_count += 1
+                        general_data_stored = True
+                        logger.info(f"  Stored general data for {primary_well}")
+                
+                elif table_type == 'casing':
                     casing_data = self.table_parser.parse_casing_table(
                         table['headers'], 
                         table['rows'],
@@ -407,6 +432,28 @@ class IngestionAgent:
                         self.db.add_casing_string(primary_well, casing)
                     stored_count += len(casing_data)
                     logger.info(f"  Stored {len(casing_data)} casing strings for {primary_well}")
+                
+                elif table_type == 'cementing':
+                    cementing_data = self.table_parser.parse_cementing_table(
+                        table['headers'],
+                        table['rows'],
+                        table['page']
+                    )
+                    for cement_job in cementing_data:
+                        self.db.add_cementing_job(primary_well, cement_job)
+                    stored_count += len(cementing_data)
+                    logger.info(f"  Stored {len(cementing_data)} cementing jobs for {primary_well}")
+                
+                elif table_type == 'fluids':
+                    fluids_data = self.table_parser.parse_fluids_table(
+                        table['headers'],
+                        table['rows'],
+                        table['page']
+                    )
+                    for fluid in fluids_data:
+                        self.db.add_drilling_fluid(primary_well, fluid)
+                    stored_count += len(fluids_data)
+                    logger.info(f"  Stored {len(fluids_data)} fluid records for {primary_well}")
                 
                 elif table_type == 'formations':
                     formation_data = self.table_parser.parse_formation_table(
@@ -419,10 +466,9 @@ class IngestionAgent:
                     stored_count += len(formation_data)
                     logger.info(f"  Stored {len(formation_data)} formations for {primary_well}")
                 
-                # TODO: Add parsers for cementing, trajectory, fluids, operations
-                
             except Exception as e:
                 logger.error(f"Failed to process table on page {table['page']}: {str(e)}")
+                logger.exception(e)  # Full stack trace for debugging
                 continue
         
         logger.info(f"Stored {stored_count} table records for {primary_well}")

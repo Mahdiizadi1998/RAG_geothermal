@@ -46,14 +46,23 @@ class WellDatabaseManager:
         CREATE TABLE IF NOT EXISTS wells (
             well_id INTEGER PRIMARY KEY AUTOINCREMENT,
             well_name TEXT UNIQUE NOT NULL,
+            license_number TEXT,
+            well_type TEXT,
             operator TEXT,
             location TEXT,
             country TEXT,
+            coordinate_x REAL,
+            coordinate_y REAL,
+            coordinate_system TEXT,
+            rig_name TEXT,
+            target_formation TEXT,
             spud_date TEXT,
             completion_date TEXT,
+            end_of_operations TEXT,
+            total_days INTEGER,
             total_depth_md REAL,
             total_depth_tvd REAL,
-            well_type TEXT,
+            sidetrack_start_depth_md REAL,
             status TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -69,6 +78,9 @@ class WellDatabaseManager:
             casing_type TEXT,
             outer_diameter REAL,
             diameter_unit TEXT DEFAULT 'inch',
+            pipe_id_nominal REAL,
+            pipe_id_drift REAL,
+            id_unit TEXT DEFAULT 'inch',
             weight REAL,
             weight_unit TEXT DEFAULT 'lb/ft',
             grade TEXT,
@@ -92,7 +104,12 @@ class WellDatabaseManager:
             casing_id INTEGER,
             stage_number INTEGER,
             cement_type TEXT,
+            lead_volume REAL,
+            lead_density REAL,
+            tail_volume REAL,
+            tail_density REAL,
             top_of_cement_md REAL,
+            toc_tvd REAL,
             bottom_of_cement_md REAL,
             volume REAL,
             volume_unit TEXT DEFAULT 'm3',
@@ -154,6 +171,25 @@ class WellDatabaseManager:
         )
         """)
         
+        # Drilling fluids table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS drilling_fluids (
+            fluid_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            well_id INTEGER NOT NULL,
+            hole_size REAL,
+            hole_size_unit TEXT DEFAULT 'inch',
+            fluid_type TEXT,
+            density_min REAL,
+            density_max REAL,
+            density_unit TEXT DEFAULT 'kg/m3',
+            depth_interval_from REAL,
+            depth_interval_to REAL,
+            depth_unit TEXT DEFAULT 'm',
+            source_page INTEGER,
+            FOREIGN KEY (well_id) REFERENCES wells(well_id)
+        )
+        """)
+        
         # Documents table - track source files
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS documents (
@@ -172,6 +208,7 @@ class WellDatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_well_name ON wells(well_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_casing_well ON casing_strings(well_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_formations_well ON formations(well_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_fluids_well ON drilling_fluids(well_id)")
         
         self.conn.commit()
         logger.info("Database schema created successfully")
@@ -224,15 +261,19 @@ class WellDatabaseManager:
         cursor.execute("""
         INSERT INTO casing_strings (
             well_id, string_number, casing_type, outer_diameter, diameter_unit,
+            pipe_id_nominal, pipe_id_drift, id_unit,
             weight, weight_unit, grade, connection_type, top_depth_md, bottom_depth_md,
             depth_unit, shoe_depth_md, shoe_depth_tvd, source_page, source_table
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             well_id,
             casing_data.get('string_number'),
             casing_data.get('casing_type'),
             casing_data.get('outer_diameter'),
             casing_data.get('diameter_unit', 'inch'),
+            casing_data.get('pipe_id_nominal'),
+            casing_data.get('pipe_id_drift'),
+            casing_data.get('id_unit', 'inch'),
             casing_data.get('weight'),
             casing_data.get('weight_unit', 'lb/ft'),
             casing_data.get('grade'),
@@ -274,7 +315,68 @@ class WellDatabaseManager:
         self.conn.commit()
         return cursor.lastrowid
     
-    def get_well_summary(self, well_name: str) -> Optional[Dict]:
+    def add_cementing_job(self, well_name: str, cement_data: Dict) -> int:
+        """Add cementing job to database"""
+        well_id = self.add_or_get_well(well_name)
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+        INSERT INTO cementing (
+            well_id, casing_id, stage_number, cement_type, lead_volume, lead_density,
+            tail_volume, tail_density, top_of_cement_md, toc_tvd, bottom_of_cement_md,
+            volume, volume_unit, density, density_unit, date, source_page
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            well_id,
+            cement_data.get('casing_id'),
+            cement_data.get('stage_number'),
+            cement_data.get('cement_type'),
+            cement_data.get('lead_volume'),
+            cement_data.get('lead_density'),
+            cement_data.get('tail_volume'),
+            cement_data.get('tail_density'),
+            cement_data.get('top_of_cement_md'),
+            cement_data.get('toc_tvd'),
+            cement_data.get('bottom_of_cement_md'),
+            cement_data.get('volume'),
+            cement_data.get('volume_unit', 'm3'),
+            cement_data.get('density'),
+            cement_data.get('density_unit', 'kg/m3'),
+            cement_data.get('date'),
+            cement_data.get('source_page')
+        ))
+        
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def add_drilling_fluid(self, well_name: str, fluid_data: Dict) -> int:
+        """Add drilling fluid data to database"""
+        well_id = self.add_or_get_well(well_name)
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+        INSERT INTO drilling_fluids (
+            well_id, hole_size, hole_size_unit, fluid_type, density_min, density_max,
+            density_unit, depth_interval_from, depth_interval_to, depth_unit, source_page
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            well_id,
+            fluid_data.get('hole_size'),
+            fluid_data.get('hole_size_unit', 'inch'),
+            fluid_data.get('fluid_type'),
+            fluid_data.get('density_min'),
+            fluid_data.get('density_max'),
+            fluid_data.get('density_unit', 'kg/m3'),
+            fluid_data.get('depth_interval_from'),
+            fluid_data.get('depth_interval_to'),
+            fluid_data.get('depth_unit', 'm'),
+            fluid_data.get('source_page')
+        ))
+        
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def get_well_summary(self, well_name: str) -> Dict:
         """Get comprehensive well summary from database"""
         cursor = self.conn.cursor()
         
@@ -311,11 +413,20 @@ class WellDatabaseManager:
         """, (well_id,))
         cementing = [dict(row) for row in cursor.fetchall()]
         
+        # Get drilling fluids
+        cursor.execute("""
+        SELECT * FROM drilling_fluids 
+        WHERE well_id = ? 
+        ORDER BY hole_size DESC
+        """, (well_id,))
+        fluids = [dict(row) for row in cursor.fetchall()]
+        
         return {
             'well_info': dict(well),
             'casing_strings': casings,
             'formations': formations,
-            'cementing': cementing
+            'cementing': cementing,
+            'drilling_fluids': fluids
         }
     
     def query_sql(self, query: str, params: tuple = ()) -> List[Dict]:

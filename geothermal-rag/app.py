@@ -34,7 +34,7 @@ from agents.confidence_scorer import ConfidenceScorerAgent
 
 # Import hybrid database components
 from agents.database_manager import WellDatabaseManager
-from agents.table_parser import TableParser
+from agents.enhanced_table_parser import EnhancedTableParser
 from agents.template_selector import TemplateSelectorAgent
 from agents.hybrid_retrieval_agent import HybridRetrievalAgent
 
@@ -76,7 +76,7 @@ class GeothermalRAGSystem:
         # Initialize hybrid database system
         db_path = Path(__file__).parent / 'well_data.db'
         self.db = WellDatabaseManager(str(db_path))
-        self.table_parser = TableParser()
+        self.table_parser = EnhancedTableParser()
         
         self.ingestion = IngestionAgent(
             database_manager=self.db,
@@ -96,7 +96,7 @@ class GeothermalRAGSystem:
         
         # Initialize new validation agents
         self.query_analyzer = QueryAnalysisAgent(self.config)
-        self.fact_verifier = FactVerificationAgent(self.config)
+        self.fact_verifier = FactVerificationAgent(self.config, database_manager=self.db)
         self.physical_validator = PhysicalValidationAgent(self.config)
         self.missing_data_agent = MissingDataAgent(self.config)
         self.confidence_scorer = ConfidenceScorerAgent(self.config)
