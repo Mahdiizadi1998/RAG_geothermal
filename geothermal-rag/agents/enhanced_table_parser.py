@@ -193,7 +193,13 @@ class EnhancedTableParser:
         # Find column indices (flexible matching)
         type_col = self._find_column(headers_lower, ['type', 'casing type', 'string'])
         size_col = self._find_column(headers_lower, ['size', 'od', 'outer diameter', 'diameter', 'casing od'])
-        id_nominal_col = self._find_column(headers_lower, ['id', 'nominal id', 'inner diameter', 'pipe id'])
+        
+        # Pipe ID matching - EXACT match for "pipe id" to avoid confusion with other ID columns
+        id_nominal_col = self._find_exact_column(headers_lower, 'pipe id')
+        if id_nominal_col is None:
+            # Fallback to other ID column names
+            id_nominal_col = self._find_column(headers_lower, ['nominal id', 'inner diameter', 'internal diameter'])
+        
         id_drift_col = self._find_column(headers_lower, ['drift', 'drift id', 'drift diameter'])
         weight_col = self._find_column(headers_lower, ['weight', 'lb/ft', 'kg/m', '#/ft', 'ppf'])
         grade_col = self._find_column(headers_lower, ['grade', 'material', 'steel grade'])
@@ -405,6 +411,20 @@ class EnhancedTableParser:
         """Find column index by matching keywords"""
         for i, header in enumerate(headers):
             if any(keyword in header for keyword in keywords):
+                return i
+        return None
+    
+    def _find_exact_column(self, headers: List[str], exact_match: str) -> Optional[int]:
+        """Find column index by exact match (case-insensitive, strips whitespace)"""
+        exact_match = exact_match.lower().strip()
+        for i, header in enumerate(headers):
+            # Clean header: remove units, extra spaces
+            clean_header = header.lower().strip()
+            # Remove common unit suffixes in parentheses or brackets
+            clean_header = re.sub(r'\s*[\(\[].*?[\)\]]', '', clean_header)
+            clean_header = clean_header.strip()
+            
+            if clean_header == exact_match:
                 return i
         return None
     
