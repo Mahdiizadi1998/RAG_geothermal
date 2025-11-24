@@ -41,12 +41,15 @@ class OllamaHelper:
         
         # Summarization config
         summary_config = self.config.get('summarization', {})
-        self.default_word_count = summary_config.get('default_words', 200)
-        self.word_count_tolerance = summary_config.get('tolerance_percent', 5) / 100.0
-        self.max_retries = summary_config.get('max_retries', 2)
+        self.default_word_count = summary_config.get('default_words')  # Can be null
+        self.word_count_tolerance = summary_config.get('tolerance_percent', 20) / 100.0
+        self.max_retries = summary_config.get('max_retries', 1)
         
         logger.info(f"Ollama models: QA={self.model_qa}, Summary={self.model_summary}, Verification={self.model_verification}")
-        logger.info(f"Timeouts: {self.timeout}s (7 min), Default summary: {self.default_word_count} words (±{int(self.word_count_tolerance*100)}%)")
+        if self.default_word_count:
+            logger.info(f"Timeouts: {self.timeout}s, Default summary: {self.default_word_count} words (±{int(self.word_count_tolerance*100)}%)")
+        else:
+            logger.info(f"Timeouts: {self.timeout}s, Default summary: No word limit (as much as needed)")
     
     def generate_answer(self, question: str, context_chunks: List[Dict], 
                        max_tokens: Optional[int] = None) -> str:
@@ -100,52 +103,79 @@ class OllamaHelper:
         Returns:
             Generated summary as string with strict word count
         """
-        # Use default if not specified
+        # Use default if not specified (can be null = no limit)
         if target_words is None:
             target_words = self.default_word_count
-            logger.info(f"No word count specified - using default: {target_words} words")
+            if target_words is None:
+                # No limit - generate comprehensive summary
+                logger.info("No word count limit - generating comprehensive summary")
+                target_words = 0  # Signal to skip word count enforcement
+            else:
+                logger.info(f"No word count specified - using default: {target_words} words")
         
-        # Combine chunks - use more chunks for comprehensive summaries
+        # Get citation settings
+        summary_config = self.config.get('summarization', {})
+        enable_citations = summary_config.get('enable_citations', True)
+        
+        # Combine chunks - use more chunks for comprehensive summaries with source metadata
         content_parts = []
         for i, chunk in enumerate(chunks[:20], 1):  # Use up to 20 chunks for comprehensive summary
-            # Add source markers for traceability
+            # Add source markers with page numbers for citations
             source = chunk['metadata'].get('source_file', 'unknown')
-            content_parts.append(f"[Section {i} from {source}]\n{chunk['text']}")
+            pages = chunk['metadata'].get('page_numbers', [])
+            page_str = f", Page {pages[0]}" if pages else ""
+            
+            content_parts.append(f"[Section {i} from {source}{page_str}]\n{chunk['text']}")
         
         content = "\n\n".join(content_parts)
         
         logger.info(f"Preparing summary from {len(content_parts)} chunks (~{len(content)} chars)")
+        logger.info(f"Citations enabled: {enable_citations}")
         
-        # Try with retries for strict word count
-        for attempt in range(self.max_retries + 1):
-            # Create prompt with word count instruction
-            prompt = self._create_summary_prompt(content, target_words, focus, attempt > 0)
+        # Try with retries (only if word count specified)
+        max_attempts = (self.max_retries + 1) if target_words > 0 else 1
+        
+        for attempt in range(max_attempts):
+            # Create prompt with word count instruction and citations
+            prompt = self._create_summary_prompt(content, target_words, focus, attempt > 0, enable_citations)
             
             try:
-                logger.info(f"Generating summary (target: {target_words} words, attempt {attempt+1}/{self.max_retries+1}, timeout={self.timeout_summary}s)...")
+                if target_words > 0:
+                    logger.info(f"Generating summary (target: {target_words} words, attempt {attempt+1}/{max_attempts}, timeout={self.timeout_summary}s)...")
+                    max_tokens = int(target_words * 2.5)
+                else:
+                    logger.info(f"Generating comprehensive summary (no word limit, timeout={self.timeout_summary}s)...")
+                    max_tokens = 4000  # Allow long comprehensive summaries
+                    
                 response = self._call_ollama(
                     prompt, 
-                    max_tokens=int(target_words * 2.5),  # Allow buffer for generation
+                    max_tokens=max_tokens,
                     timeout=self.timeout_summary,
-                    model=self.model_summary  # Use better model for summaries
+                    model=self.model_summary
                 )
                 
-                # Count words and validate
+                # Count words and validate (only if target specified)
                 word_count = len(response.split())
-                tolerance = int(target_words * self.word_count_tolerance)
-                min_words = target_words - tolerance
-                max_words = target_words + tolerance
                 
-                logger.info(f"Generated {word_count} words (target: {target_words} ±{tolerance})")
-                
-                if min_words <= word_count <= max_words:
-                    logger.info(f"✓ Word count within tolerance")
+                if target_words == 0:
+                    # No word count enforcement - accept result
+                    logger.info(f"✓ Generated comprehensive summary ({word_count} words)")
                     return response
-                elif attempt < self.max_retries:
-                    logger.warning(f"✗ Word count {word_count} outside range [{min_words}, {max_words}], retrying...")
                 else:
-                    logger.warning(f"✗ Word count {word_count} outside range after {self.max_retries} retries, accepting result")
-                    return response
+                    tolerance = int(target_words * self.word_count_tolerance)
+                    min_words = target_words - tolerance
+                    max_words = target_words + tolerance
+                    
+                    logger.info(f"Generated {word_count} words (target: {target_words} ±{tolerance})")
+                    
+                    if min_words <= word_count <= max_words:
+                        logger.info(f"✓ Word count within tolerance")
+                        return response
+                    elif attempt < self.max_retries:
+                        logger.warning(f"✗ Word count {word_count} outside range [{min_words}, {max_words}], retrying...")
+                    else:
+                        logger.warning(f"✗ Word count {word_count} outside range after {self.max_retries} retries, accepting result")
+                        return response
                     
             except Exception as e:
                 logger.error(f"Summary generation failed (attempt {attempt+1}): {str(e)}")
@@ -194,14 +224,45 @@ Answer (grounded strictly in context):"""
         return prompt
     
     def _create_summary_prompt(self, content: str, target_words: int, 
-                              focus: Optional[str] = None, is_retry: bool = False) -> str:
-        """Create prompt for summarization with strict word count and grounding"""
+                              focus: Optional[str] = None, is_retry: bool = False,
+                              enable_citations: bool = True) -> str:
+        """Create prompt for summarization with strict word count, grounding, and citations"""
         focus_text = f" with emphasis on {focus}" if focus else ""
         
-        # Stricter instructions on retry
-        strictness = ""
-        if is_retry:
-            strictness = f"\n⚠️ CRITICAL: Previous attempt had incorrect word count. You MUST produce EXACTLY {target_words} words (±{int(self.word_count_tolerance*100)}%). Count carefully."
+        # Handle no word count limit
+        if target_words == 0:
+            word_count_instruction = "Write a COMPREHENSIVE and DETAILED summary. Include ALL important information. No word limit."
+            word_count_range = "comprehensive (no limit)"
+        else:
+            # Stricter instructions on retry
+            strictness = ""
+            if is_retry:
+                strictness = f"\n⚠️ CRITICAL: Previous attempt had incorrect word count. You MUST produce EXACTLY {target_words} words (±{int(self.word_count_tolerance*100)}%). Count carefully."
+            word_count_instruction = f"Your summary MUST be EXACTLY {target_words} words (±{int(self.word_count_tolerance*100)}% = {int(target_words * (1 - self.word_count_tolerance))}-{int(target_words * (1 + self.word_count_tolerance))} words){strictness}"
+            word_count_range = f"{target_words} words"
+        
+        # Citation instructions
+        citation_text = ""
+        if enable_citations:
+            citation_text = """
+
+6. CITATIONS (MANDATORY - NO EXCEPTIONS):
+   - After EVERY sentence with factual content, add: [Source: filename, Page X]
+   - EVERY depth value MUST have a citation
+   - EVERY pipe specification MUST have a citation
+   - EVERY measurement MUST have a citation
+   - EVERY date MUST have a citation
+   - EVERY operator/well name MUST have a citation
+   
+   Examples of CORRECT citation format:
+   ✓ "The ADK-GT-01 well reached 2667.5m MD and 2358m TVD [Source: NLOG_GS_PUB_EOWR ADK-GT-01 SODM v1.1.pdf, Page 12]"
+   ✓ "A 9 5/8 inch casing with 53.5 lb/ft weight was set at 2642m MD [Source: completion_report.pdf, Page 8]"
+   ✓ "Drilling commenced on January 15, 2017 [Source: operations_log.pdf, Page 3]"
+   
+   ✗ WRONG: "The well reached 2667.5m MD" (missing citation)
+   ✗ WRONG: "Casing installed at 2642m" (missing citation)
+   
+   Format: [Source: EXACT_FILENAME.pdf, Page XX]"""
         
         prompt = f"""You are a technical assistant for geothermal well engineering. Create a factual summary of the following well report content{focus_text}.
 
@@ -214,36 +275,44 @@ STRICT REQUIREMENTS:
    - Use exact numbers, dates, and names from the content
    - Do NOT add general knowledge about geothermal wells
    - Do NOT infer or assume details not stated
-   - Do NOT use placeholder values or typical ranges
+   - Do NOT use placeholder values like "approximately" or "around"
    - When mentioning operations/equipment, use exact terminology from content
+   - EVERY claim must be verifiable from the content above
 
-2. WORD COUNT: Your summary MUST be EXACTLY {target_words} words (±{int(self.word_count_tolerance*100)}% = {int(target_words * (1 - self.word_count_tolerance))}-{int(target_words * (1 + self.word_count_tolerance))} words)
-   - Count carefully as you write
-   - Adjust density to hit target{strictness}
+2. WORD COUNT: {word_count_instruction}
 
 3. CONTENT PRIORITY (include in order until word limit):
    - Well name, operator, dates (if present)
-   - Measured depth (MD) and True Vertical Depth (TVD) with exact values
-   - Casing/liner sizes with exact specifications (e.g., "9 5/8 inch, 53.5 lb/ft, L80")
-   - Key operations mentioned (drilling, completion, testing)
+   - Total depth: EXACT Measured Depth (MD) and True Vertical Depth (TVD) values
+     ⚠️ CRITICAL: MD (Measured Depth) is ALWAYS ≥ TVD (True Vertical Depth)
+     MD = length along wellbore path, TVD = straight vertical depth
+     In vertical wells: MD ≈ TVD. In deviated wells: MD > TVD
+     Example: "2667.5m MD, 2358m TVD" ✓ CORRECT (MD > TVD)
+     Example: "2358m MD, 2667.5m TVD" ✗ WRONG (TVD cannot exceed MD)
+   - Casing program: EXACT specifications (e.g., "9 5/8 inch, 53.5 lb/ft, L80, set at 2642m MD")
+   - Key operations mentioned (drilling, completion, testing) with dates
    - Equipment used (exact names/types from content)
-   - Any measurements, test results, or findings with units
-   - Issues or special conditions noted
+   - Measurements, test results, or findings with exact units
+   - Formation tops and geology (exact depths and formation names)
+   - Issues or special conditions noted (with depths/dates)
 
 4. FORMAT:
    - Write as continuous technical prose (not bullet points)
-   - Use exact units from content (m, inch, bar, etc.)
-   - Preserve all significant figures
+   - Use exact units from content (m, inch, bar, ft, etc.)
+   - Preserve all significant figures (e.g., "2667.5 m" not "2668 m")
    - Name specific formations, zones, or targets if mentioned
+   - Include well name prominently{citation_text}
 
 5. FORBIDDEN:
    - ❌ Generic statements like "typical completion procedures"
+   - ❌ Vague terms: "approximately", "around", "about"
    - ❌ Assumed values or estimates
    - ❌ Operations not mentioned in content
    - ❌ Equipment not specifically named
    - ❌ Standard industry practice not stated in content
+   - ❌ Claiming information without citation (if citations enabled)
 
-Factual Summary ({target_words} words, grounded only in provided content):"""
+Factual Summary ({word_count_range}, grounded only in provided content, with citations for EVERY claim):"""
         return prompt
     
     def _call_ollama(self, prompt: str, max_tokens: Optional[int] = None, 

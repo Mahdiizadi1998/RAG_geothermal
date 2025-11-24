@@ -1,17 +1,24 @@
 ollama:
   host: http://localhost:11434
-  # CPU-optimized model selection (research-based task matching)
-  # Strategy: smallest model that maintains quality for each task
-  model_qa: phi3:mini               # Good balance speed/quality (2.2GB)
-  model_summary: gemma2:2b          # FASTEST for summaries (1.6GB, 5x faster than 7B)
-  model_verification: tinyllama     # Fast claim matching (637MB)
-  model_extraction: qwen2.5:7b      # Accuracy critical here (4.7GB)
+  # CPU-optimized models (8-core, 16GB RAM, no GPU)
+  # Strategy: Fast, efficient models that work well on CPU
+  model_qa: phi3:mini              # Fast CPU model for Q&A (2.3GB)
+  model_summary: gemma2:2b         # Efficient for summarization (1.6GB)
+  model_verification: phi3:mini    # Fast verification (2.3GB)
+  model_extraction: qwen2.5:7b     # Good balance for CPU (4.7GB)
   model_embedding: nomic-embed-text
-  # Timeouts optimized for small models on CPU
-  timeout: 360        # Q&A with phi3:mini (6 min)
-  timeout_summary: 180   # Summary with gemma2:2b (3 min) 
-  timeout_extraction: 600  # Extraction needs time (10 min)
-  timeout_verification: 120  # tinyllama is very fast (2 min)
+  
+embeddings:
+  # Choose embedding backend: 'ollama' or 'sentence-transformers'
+  # WHY sentence-transformers: 2-3x faster on CPU, runs locally, no Ollama needed
+  backend: "sentence-transformers"  # Options: 'ollama' or 'sentence-transformers'
+  model: "sentence-transformers/all-MiniLM-L6-v2"  # Fast, quality embeddings (80MB)
+  # all-MiniLM-L6-v2: 384 dimensions, ~200 chunks/sec on CPU, great for technical text
+  # Timeouts optimized for CPU
+  timeout: 600        # Q&A (10 min) - increased for stability
+  timeout_summary: 600   # Summary (10 min) - no word limit, needs more time
+  timeout_extraction: 900  # Extraction (15 min)
+  timeout_verification: 300  # Verification (5 min)
   
 vector_db:
   type: chromadb
@@ -19,26 +26,50 @@ vector_db:
   distance_metric: cosine
   
 chunking:
-  # Optimized chunking strategy based on task requirements
-  # Research shows: summaries need larger chunks, Q&A needs smaller
+  # HYBRID PARSING STRATEGY: Tables vs Narrative Text
+  # WHY: Tables need different treatment than narrative text to preserve row context
+  
+  # Stream A: Tables (pdfplumber extraction)
+  # Tables are NOT chunked - each table row becomes a semantic summary for embedding
+  # Example: "Casing Table: 13 3/8 inch casing set at 1331m MD"
+  # Raw table data (JSON/Dict) stored in metadata for exact LLM retrieval
+  tables:
+    extract_method: "pdfplumber"      # Best for detecting tables in Well Reports
+    vertical_strategy: "text"         # Handle invisible grid lines (common in these PDFs)
+    store_raw: true                   # Keep original JSON/Dict in metadata
+    summarize_rows: true              # Convert each row to searchable text
+    min_words_in_row: 3              # Skip header-only or empty rows
+    
+  # Stream B: Narrative Text (semantic splitting by section headers)
+  # WHY: Use RecursiveCharacterTextSplitter for natural breaks
   factual_qa:
-    chunk_size: 800      # Precise fact retrieval
-    chunk_overlap: 400   # 50% overlap for context
+    chunk_size: 800      # ~800 tokens for focused Q&A context
+    chunk_overlap: 100   # Minimal overlap, enough for continuity
+    method: "recursive"  # RecursiveCharacterTextSplitter
+    clean_headers: true  # Remove "Page X of Y", "SodM EOWR" footers
+    
   technical_extraction:
-    chunk_size: 5000     # Full tables without splits
-    chunk_overlap: 1200  # High overlap for safety
+    chunk_size: 2000     # Technical sections (casing, cementing, fluids)
+    chunk_overlap: 400   # 20% overlap maintains technical context
+    method: "semantic"   # Split by section headers
+    preserve_sections: true  # Keep "4. GEOLOGY" blocks together
+    
   summary:
-    chunk_size: 4000     # LARGER for narrative flow (research-backed)
-    chunk_overlap: 1000  # 25% overlap maintains continuity
+    chunk_size: 1500     # Section-level summaries
+    chunk_overlap: 200   # Light overlap
+    method: "semantic"   # Split by major headers ("1. GENERAL DATA")
+    
   # Fine-grained for exact matches
   fine_grained:
-    chunk_size: 400      # Exact phrase matching
-    chunk_overlap: 200   # 50% overlap
+    chunk_size: 400      # Small chunks for precise matches
+    chunk_overlap: 80    # 20% overlap
+    
   # Coarse for document-level context
   coarse_grained:
-    chunk_size: 8000     # ~2 pages for full context
-    chunk_overlap: 2000  # Cross-page continuity
-  enable_hybrid: true
+    chunk_size: 3000     # ~1 page for full section context
+    chunk_overlap: 500   # Cross-section continuity
+    
+  enable_hybrid: true    # Enable both Stream A and Stream B
     
 extraction:
   enable_llm_fallback: true
@@ -78,17 +109,23 @@ validation:
 retrieval:
   hybrid_weight_dense: 0.8   # Semantic search for technical content
   hybrid_weight_sparse: 0.2  # Keyword matching weight
-  # Optimized counts: quality > quantity (research shows 10-20 optimal)
-  top_k_qa: 20           # Reduced: focused context better than noise
-  top_k_extraction: 50   # Keep high for comprehensive data extraction
-  top_k_summary: 12      # REDUCED: 12 large chunks = same content as 60 small
-  top_k_fine: 15         # Reduced for precision
-  top_k_coarse: 8        # Few high-level chunks for context
+  # Hybrid retrieval: Fetch both table summaries and narrative chunks
+  top_k_qa: 15           # Focused retrieval for Q&A
+  top_k_extraction: 30   # Include table rows + surrounding context
+  top_k_summary: 10      # Section-level summaries
+  top_k_tables: 20       # Dedicated retrieval for table rows
+  top_k_fine: 15         # Precise matches
+  top_k_coarse: 8        # High-level context
+  prioritize_tables: true  # Boost table results for numerical queries (pipe ID, depths, etc.)
   
 summarization:
-  default_words: 200  # Default word count if not specified
-  tolerance_percent: 5  # ±5% tolerance for word count
-  max_retries: 2  # Retry generation if word count is off
+  default_words: null  # No default limit - generate as much as needed
+  tolerance_percent: 20  # ±20% tolerance for word count (flexible)
+  max_retries: 1  # Retry once if specific word count requested
+  enable_citations: true  # Include source citations in summaries
+  enable_verification: true  # Perform fact verification on summaries
+  min_chunks_for_verification: 5  # Minimum chunks needed for verification
+  # WHY no limit: User said "write as much as needed"
 
 ui:
   port: 7860

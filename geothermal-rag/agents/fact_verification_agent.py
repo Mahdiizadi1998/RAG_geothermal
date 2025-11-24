@@ -121,15 +121,38 @@ class FactVerificationAgent:
         """
         Extract factual claims from answer
         Focuses on statements with numbers, measurements, well names, etc.
+        Skips meta-statements about missing information.
         """
         claims = []
         
         # Split into sentences
         sentences = re.split(r'[.!?]+', answer)
         
+        # Patterns indicating meta-statements about missing info (not factual claims)
+        negative_patterns = [
+            r'not provided',
+            r'not mentioned',
+            r'not explicitly',
+            r'no information',
+            r'no specific',
+            r'not available',
+            r'not stated',
+            r'not given',
+            r'does not contain',
+            r'lack[s]? the answer',
+            r'cannot be determined',
+            r'are only given',
+            r'is important to note that there are no',
+        ]
+        
         for sentence in sentences:
             sentence = sentence.strip()
             if len(sentence) < 10:  # Skip very short fragments
+                continue
+            
+            # Skip negative/meta statements - these aren't claims to verify
+            is_negative = any(re.search(pattern, sentence, re.IGNORECASE) for pattern in negative_patterns)
+            if is_negative:
                 continue
             
             # Check if sentence contains factual content

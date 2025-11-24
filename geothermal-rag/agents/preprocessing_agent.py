@@ -4,6 +4,7 @@ Implements different chunking strategies for different query types
 """
 
 import spacy
+import re
 from typing import Dict, List, Tuple
 import logging
 import yaml
@@ -100,8 +101,19 @@ class PreprocessingAgent:
                 if strategy_name == 'enable_hybrid' or not isinstance(strategy_config, dict):
                     continue
                 
+                # Skip 'tables' strategy - handled separately in hybrid pipeline
+                # Tables are NOT chunked - they're extracted row-by-row with metadata
+                if strategy_name == 'tables':
+                    logger.info(f"  {strategy_name}: Skipping (handled by hybrid table extraction)")
+                    continue
+                
                 # Only process hybrid strategies if enabled
                 if strategy_name in ['fine_grained', 'coarse_grained'] and not enable_hybrid:
+                    continue
+                
+                # Check if strategy has chunk_size (narrative strategies do, tables don't)
+                if 'chunk_size' not in strategy_config:
+                    logger.warning(f"  {strategy_name}: Missing chunk_size, skipping")
                     continue
                 
                 chunks = self._create_chunks(
@@ -189,22 +201,41 @@ class PreprocessingAgent:
         return chunks
     
     def _segment_sentences_spacy(self, text: str) -> List[str]:
-        """Segment text into sentences using spaCy"""
+        """Segment text into sentences using spaCy with technical term awareness"""
         doc = self.nlp(text)
-        return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+        sentences = []
+        
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            if not sent_text:
+                continue
+            
+            # Check if sentence contains critical technical info that should stay together
+            # Keep sentences with measurements, pipe specs, depths together
+            has_technical = any([
+                re.search(r'\b(?:TVD|MD|measured depth|true vertical depth)\b', sent_text, re.IGNORECASE),
+                re.search(r'\d+(?:\.\d+)?\s*(?:m|ft|inch|mm)\b', sent_text),  # Measurements
+                re.search(r'\b(?:casing|tubing|pipe)\s+\d+', sent_text, re.IGNORECASE),  # Pipe specs
+                re.search(r'\d+(?:\.\d+)?\s*(?:lb/ft|kg/m)', sent_text),  # Weight specs
+            ])
+            
+            sentences.append(sent_text)
+        
+        return sentences
     
     def _segment_sentences_simple(self, text: str) -> List[str]:
-        """Fallback: simple sentence segmentation"""
+        """Fallback: simple sentence segmentation with technical term awareness"""
         import re
         # Split on periods, question marks, exclamation marks followed by space and capital letter
+        # But preserve technical abbreviations like "U.S.", "p.s.i.", etc.
         sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
-        return [s.strip() for s in sentences if s.strip()]
+        return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
     
     def _create_chunk_dict(self, text: str, doc: Dict, strategy: str, chunk_id: int) -> Dict:
-        """Create chunk dictionary with metadata"""
+        """Create chunk dictionary with enhanced metadata including section headers and table/figure refs"""
         # Estimate which pages this chunk might be from
         # This is approximate since we don't track exact positions
-        page_numbers = self._estimate_pages(text, doc)
+        page_numbers, page_metadata = self._estimate_pages_with_metadata(text, doc)
         
         return {
             'text': text,
@@ -215,29 +246,50 @@ class PreprocessingAgent:
             'well_names': doc['wells'],
             'metadata': {
                 'total_pages': doc['pages'],
-                'source_file': doc['filename']
+                'source_file': doc['filename'],
+                'section_headers': page_metadata.get('section_headers', []),
+                'table_refs': page_metadata.get('table_refs', []),
+                'figure_refs': page_metadata.get('figure_refs', [])
             }
         }
     
-    def _estimate_pages(self, chunk_text: str, doc: Dict) -> List[int]:
+    def _estimate_pages_with_metadata(self, chunk_text: str, doc: Dict) -> tuple:
         """
-        Estimate which pages contain this chunk's text
+        Estimate which pages contain this chunk's text and extract metadata
         
-        This is a simple heuristic: check first 100 chars of chunk
-        against each page's content
+        Returns:
+            Tuple of (page_numbers: List[int], metadata: Dict)
         """
         sample = chunk_text[:100].lower()
         matching_pages = []
+        combined_metadata = {
+            'section_headers': [],
+            'table_refs': [],
+            'figure_refs': []
+        }
         
         for page in doc['page_contents']:
             if sample in page['text'].lower():
                 matching_pages.append(page['page_number'])
+                
+                # Collect metadata from matching pages
+                if 'section_headers' in page:
+                    combined_metadata['section_headers'].extend(page['section_headers'])
+                if 'table_refs' in page:
+                    combined_metadata['table_refs'].extend(page['table_refs'])
+                if 'figure_refs' in page:
+                    combined_metadata['figure_refs'].extend(page['figure_refs'])
+        
+        # Remove duplicates while preserving order
+        combined_metadata['section_headers'] = list(dict.fromkeys(combined_metadata['section_headers']))
+        combined_metadata['table_refs'] = list(dict.fromkeys(combined_metadata['table_refs']))
+        combined_metadata['figure_refs'] = list(dict.fromkeys(combined_metadata['figure_refs']))
         
         # If no exact match, return approximate range
         if not matching_pages:
-            # Estimate based on position in document
-            # This is rough but better than nothing
-            return [1]  # Default to page 1
+            matching_pages = [1]  # Default to page 1
+        
+        return matching_pages, combined_metadata
         
         return matching_pages
     

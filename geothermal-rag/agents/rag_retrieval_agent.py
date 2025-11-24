@@ -5,7 +5,7 @@ Implements vector search with ChromaDB and hybrid dense/sparse retrieval
 
 import chromadb
 from chromadb.config import Settings
-from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
+from chromadb.utils.embedding_functions import OllamaEmbeddingFunction, SentenceTransformerEmbeddingFunction
 from typing import Dict, List, Optional
 import logging
 import yaml
@@ -50,12 +50,24 @@ class RAGRetrievalAgent:
         os.environ['OLLAMA_NUM_GPU'] = '0'
         logger.info("🖥️  Configured for CPU-only mode (OLLAMA_NUM_GPU=0)")
         
-        # Initialize Ollama embedding function (CPU-based)
-        self.embedding_function = OllamaEmbeddingFunction(
-            url=self.ollama_config['host'] + "/api/embeddings",
-            model_name=self.ollama_config['model_embedding']
-        )
-        logger.info(f"📊 Using Ollama embeddings: {self.ollama_config['model_embedding']}")
+        # Initialize embedding function based on config
+        embedding_config = self.config.get('embeddings', {'backend': 'ollama'})
+        embedding_backend = embedding_config.get('backend', 'ollama')
+        
+        if embedding_backend == 'sentence-transformers':
+            # Use sentence-transformers (2-3x faster on CPU)
+            model_name = embedding_config.get('model', 'sentence-transformers/all-MiniLM-L6-v2')
+            self.embedding_function = SentenceTransformerEmbeddingFunction(
+                model_name=model_name
+            )
+            logger.info(f"📊 Using sentence-transformers: {model_name} (CPU-optimized)")
+        else:
+            # Use Ollama embeddings (default)
+            self.embedding_function = OllamaEmbeddingFunction(
+                url=self.ollama_config['host'] + "/api/embeddings",
+                model_name=self.ollama_config['model_embedding']
+            )
+            logger.info(f"📊 Using Ollama embeddings: {self.ollama_config['model_embedding']}")
         
         # Initialize ChromaDB client
         db_path = Path(self.vector_db_config['path'])

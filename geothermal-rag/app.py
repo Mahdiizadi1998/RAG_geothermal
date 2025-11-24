@@ -22,6 +22,7 @@ from agents.validation_agent import ValidationAgent
 from agents.chat_memory import ChatMemory
 from agents.ensemble_judge_agent import EnsembleJudgeAgent
 from agents.llm_helper import OllamaHelper
+from agents.well_summary_agent import WellSummaryAgent
 from models.nodal_runner import NodalAnalysisRunner
 
 # Import new validation agents
@@ -30,6 +31,12 @@ from agents.fact_verification_agent import FactVerificationAgent
 from agents.physical_validation_agent import PhysicalValidationAgent
 from agents.missing_data_agent import MissingDataAgent
 from agents.confidence_scorer import ConfidenceScorerAgent
+
+# Import hybrid database components
+from agents.database_manager import WellDatabaseManager
+from agents.table_parser import TableParser
+from agents.template_selector import TemplateSelectorAgent
+from agents.hybrid_retrieval_agent import HybridRetrievalAgent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -65,7 +72,16 @@ class GeothermalRAGSystem:
         
         # Initialize agents
         logger.info("Initializing agents...")
-        self.ingestion = IngestionAgent()
+        
+        # Initialize hybrid database system
+        db_path = Path(__file__).parent / 'well_data.db'
+        self.db = WellDatabaseManager(str(db_path))
+        self.table_parser = TableParser()
+        
+        self.ingestion = IngestionAgent(
+            database_manager=self.db,
+            table_parser=self.table_parser
+        )
         self.preprocessing = PreprocessingAgent(config_path)
         self.rag = RAGRetrievalAgent(config_path)
         self.extraction = ParameterExtractionAgent(
@@ -75,6 +91,7 @@ class GeothermalRAGSystem:
         self.memory = ChatMemory()
         self.judge = EnsembleJudgeAgent()
         self.llm = OllamaHelper(config_path)
+        self.well_summary_agent = WellSummaryAgent(llm_helper=self.llm)
         self.nodal_runner = NodalAnalysisRunner()
         
         # Initialize new validation agents
@@ -83,6 +100,10 @@ class GeothermalRAGSystem:
         self.physical_validator = PhysicalValidationAgent(self.config)
         self.missing_data_agent = MissingDataAgent(self.config)
         self.confidence_scorer = ConfidenceScorerAgent(self.config)
+        
+        # Initialize hybrid retrieval and template selector
+        self.template_selector = TemplateSelectorAgent(self.db)
+        self.hybrid_retrieval = HybridRetrievalAgent(self.db, self.rag)
         
         # Store pending extraction for confirmation
         self.pending_extraction = None
@@ -119,7 +140,23 @@ class GeothermalRAGSystem:
             if not documents:
                 return "❌ Failed to process any documents"
             
-            # Step 2: Chunking
+            # Step 1.5: Extract and store tables in database
+            tables_stored = 0
+            for doc in documents:
+                if doc['wells']:  # Only process if well names detected
+                    try:
+                        stored = self.ingestion.process_and_store_tables(
+                            doc['filepath'],
+                            doc['wells']
+                        )
+                        tables_stored += stored
+                    except Exception as e:
+                        logger.warning(f"Table extraction failed for {doc['filename']}: {e}")
+            
+            if tables_stored > 0:
+                logger.info(f"✓ Stored {tables_stored} table records in database")
+            
+            # Step 2: Chunking (only narrative text, not tables)
             chunks_dict = self.preprocessing.process(documents)
             
             # Get statistics
@@ -162,11 +199,37 @@ class GeothermalRAGSystem:
             if hybrid_present:
                 status += " (Using multi-granularity hybrid chunking for better retrieval)"
             
+            # Add database statistics
+            if tables_stored > 0:
+                status += f"\n\n**Hybrid Database System:**\n"
+                status += f"  • {tables_stored} table records stored in SQLite\n"
+                status += f"  • Exact numerical data ready for queries\n"
+                status += f"  • Semantic search available for narrative content\n"
+            
             return status
             
         except Exception as e:
             logger.error(f"Indexing failed: {str(e)}", exc_info=True)
             return f"❌ Error: {str(e)}"
+    
+    def _extract_well_name_from_query(self, query: str) -> Optional[str]:
+        """Extract well name from query or use document context"""
+        import re
+        
+        # Try to find well name in query
+        well_pattern = re.compile(r'\b([A-Z]{2,10}-GT-\d{2}(?:-S\d+)?)\b')
+        match = well_pattern.search(query)
+        
+        if match:
+            return match.group(1)
+        
+        # If not in query, check indexed documents for well names
+        for doc_name in self.indexed_documents:
+            match = well_pattern.search(doc_name)
+            if match:
+                return match.group(1)
+        
+        return None
     
     def query(self, user_query: str, mode: str = "Q&A") -> Tuple[str, str]:
         """
@@ -325,27 +388,134 @@ class GeothermalRAGSystem:
         return response_text, debug_info
     
     def _handle_summary(self, query: str) -> Tuple[str, str]:
-        """Handle document summarization with STRICT word count control"""
-        # Analyze query
+        """Handle document summarization using 3-pass extraction system"""
+        # Analyze query to check if user wants detailed End of Well Summary
         query_analysis = self.query_analyzer.analyze(query)
+        query_lower = query.lower()
+        
+        # Check if user wants detailed/professional End of Well Summary
+        detailed_summary = any(kw in query_lower for kw in [
+            'end of well', 'eow', 'detailed', 'professional', 'comprehensive',
+            'completion report', 'well report', 'drilling report'
+        ])
+        
+        # If detailed summary requested and we have indexed documents, use 3-pass system
+        if detailed_summary and self.indexed_documents:
+            logger.info("📝 Generating detailed End of Well Summary using 3-pass system...")
+            
+            try:
+                # Get the most recent PDF file path
+                pdf_path = None
+                document_data = None
+                
+                if self.indexed_documents:
+                    # Use first indexed document (can be enhanced to select specific well)
+                    doc_info = self.indexed_documents[0]
+                    pdf_path = doc_info.get('filepath')
+                    document_data = doc_info
+                
+                if not pdf_path:
+                    logger.warning("No PDF path available for 3-pass summary")
+                    # Fall through to standard summary
+                else:
+                    # Generate 3-pass summary
+                    summary_result = self.well_summary_agent.generate_summary(
+                        pdf_path=pdf_path,
+                        document_data=document_data
+                    )
+                    
+                    # Build response
+                    response_parts = []
+                    
+                    # Add confidence header
+                    confidence = summary_result['confidence']
+                    if confidence >= 0.8:
+                        response_parts.append("✅ **HIGH CONFIDENCE END OF WELL SUMMARY**\n")
+                    elif confidence >= 0.6:
+                        response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
+                    else:
+                        response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY DATA**\n")
+                    
+                    # Add the summary report
+                    response_parts.append(summary_result['summary_report'])
+                    
+                    # Add confidence details
+                    response_parts.append(f"\n\n**Confidence Score:** {confidence*100:.0f}%")
+                    response_parts.append("\n*Generated using 3-pass extraction: Metadata → Technical Specs → Narrative*")
+                    
+                    summary_text = "\n".join(response_parts)
+                    
+                    # Debug info
+                    debug_info = f"3-Pass Summary System Used\n"
+                    debug_info += f"Pass 1 - Metadata: {len(summary_result['metadata'])} fields\n"
+                    debug_info += f"Pass 2 - Casing Program: {len(summary_result['technical_specs'].get('casing_program', []))} strings\n"
+                    debug_info += f"Pass 3 - Narrative: {len(summary_result['narrative'])} sections\n"
+                    debug_info += f"Confidence: {confidence*100:.0f}%\n"
+                    debug_info += f"PDF: {pdf_path}\n"
+                    
+                    return summary_text, debug_info
+                    
+            except Exception as e:
+                logger.error(f"3-pass summary generation failed: {str(e)}")
+                logger.exception(e)
+                # Fall through to standard summary
+        
+        # Standard summary approach (original code)
+        logger.info("📝 Generating standard summary...")
         
         # Extract target word count (use analysis result or default)
         target_words = query_analysis.target_word_count
         if target_words is None:
             target_words = self.config.get('summarization', {}).get('default_words', 200)
         
-        logger.info(f"📝 Generating summary: {target_words} words (strict)")
-        
-        # Ensure reasonable range
-        target_words = max(50, min(target_words, 1000))
+        # Handle null default (no limit) - use 0 as signal for comprehensive mode
+        if target_words is None:
+            target_words = 0
+            logger.info(f"Target: No word limit (comprehensive summary)")
+        else:
+            logger.info(f"Target: {target_words} words")
+            # Ensure reasonable range only if a limit is specified
+            target_words = max(50, min(target_words, 1000))
         
         # Extract focus area from query analysis
         focus = ', '.join(query_analysis.detected_focus) if query_analysis.detected_focus else None
         
-        # Retrieve chunks using hybrid granularity (multiple chunk sizes for comprehensive summary)
-        retrieval_result = self.rag.retrieve_hybrid_granularity(query, mode='summary')
-        chunks = retrieval_result['chunks']
-        logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
+        # Extract well name for hybrid retrieval
+        well_name = self._extract_well_name_from_query(query)
+        
+        # Use hybrid retrieval if well name is known
+        if well_name:
+            logger.info(f"Using hybrid retrieval for well: {well_name}")
+            hybrid_result = self.hybrid_retrieval.retrieve(
+                query=query,
+                well_name=well_name,
+                mode='hybrid',  # Use both database and semantic search
+                top_k=15
+            )
+            
+            # Extract chunks from hybrid result
+            chunks = hybrid_result.get('semantic_results', [])
+            
+            # Add database info as context
+            db_context = []
+            for db_result in hybrid_result.get('database_results', []):
+                db_context.append({
+                    'text': db_result.get('text', ''),
+                    'metadata': {
+                        'source_file': 'Database',
+                        'type': db_result.get('type', 'unknown')
+                    }
+                })
+            
+            # Combine database context with semantic chunks (database first for priority)
+            chunks = db_context + chunks
+            logger.info(f"Hybrid retrieval: {len(db_context)} DB results + {len(chunks)-len(db_context)} semantic chunks")
+        else:
+            # Fallback to traditional retrieval if no well name
+            logger.info("No well name detected, using traditional semantic retrieval")
+            retrieval_result = self.rag.retrieve_hybrid_granularity(query, mode='summary')
+            chunks = retrieval_result['chunks']
+            logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
         
         if not chunks:
             return "⚠️ No content found for summarization", ""
@@ -356,16 +526,38 @@ class GeothermalRAGSystem:
         # Generate summary using LLM if available
         if self.llm_available:
             try:
-                logger.info("⏳ Generating summary with strict word count enforcement...")
+                logger.info("⏳ Generating summary with citations and strict word count enforcement...")
                 summary = self.llm.generate_summary(chunks, target_words, focus)
                 
                 # Count actual words
                 actual_words = len(summary.split())
                 logger.info(f"✓ Generated {actual_words} words (target: {target_words})")
                 
-                # Calculate confidence
+                # Perform fact verification if enabled and enough chunks
+                summary_config = self.config.get('summarization', {})
+                enable_verification = summary_config.get('enable_verification', True)
+                min_chunks = summary_config.get('min_chunks_for_verification', 5)
+                
+                fact_verification_score = 1.0  # Default to perfect if not verified
+                if enable_verification and len(chunks) >= min_chunks:
+                    logger.info("⏳ Performing fact verification on summary...")
+                    try:
+                        # Fixed: Use verify() method not verify_facts()
+                        verification_result = self.fact_verifier.verify(summary, chunks)
+                        fact_verification_score = verification_result.overall_confidence
+                        logger.info(f"✓ Fact verification complete: {fact_verification_score*100:.0f}% ({verification_result.support_rate*100:.0f}% supported)")
+                    except Exception as e:
+                        logger.warning(f"Fact verification failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        fact_verification_score = 0.5  # Assume moderate confidence
+                else:
+                    logger.info("Skipping fact verification (not enabled or insufficient chunks)")
+                
+                # Calculate confidence with verification
                 confidence = self.confidence_scorer.calculate_confidence(
                     source_quality=source_quality,
+                    fact_verification=fact_verification_score,
                     completeness=0.9,  # High for summaries
                     consistency=0.85,
                     context={'query_type': 'summary', 'word_count': actual_words}
@@ -775,7 +967,14 @@ def create_ui():
                     **Example queries:**
                     - Q&A: "What is the casing design for ADK-GT-01?"
                     - Summary: "Summarize the completion report in 300 words"
+                    - Summary (Detailed): "Generate detailed End of Well Summary" or "Professional completion report summary"
                     - Extract: "Extract trajectory data for ADK-GT-01"
+                    
+                    **✨ NEW: 3-Pass End of Well Summary**
+                    Use keywords like "End of Well", "EOW", "detailed", "professional", or "completion report" to activate:
+                    - **Pass 1**: Metadata (Operator, Well, Rig, Dates, Days Total)
+                    - **Pass 2**: Technical Specs (Casing/Tubing tables with ID column)
+                    - **Pass 3**: Narrative (Geology, hazards, instabilities)
                     
                     **Workflow for Nodal Analysis:**
                     1. Use "Extract & Analyze" mode to extract trajectory data
@@ -833,6 +1032,7 @@ def create_ui():
             This system provides intelligent analysis of geothermal well completion reports using:
             
             ### Features
+            - **✨ NEW: 3-Pass End of Well Summary**: Professional drilling reports with metadata, casing tables (with ID), and narrative
             - **Multi-strategy chunking**: Optimized for Q&A, summarization, and data extraction
             - **Two-phase retrieval**: Separate queries for trajectory and casing data
             - **Regex-first extraction**: Fast, reliable table parsing with LLM fallback
@@ -840,17 +1040,33 @@ def create_ui():
             - **Nodal analysis**: Production capacity estimation from extracted parameters
             - **Conversation memory**: Multi-turn interactions with context
             
+            ### 3-Pass Summary System
+            **Pass 1 - Metadata (Key-Value):**
+            - Scans first 3 pages
+            - Extracts: Operator, Well Name, Rig Name, Dates (Spud/End)
+            - Computes Days_Total
+            
+            **Pass 2 - Technical Specs (Table-to-Markdown):**
+            - Uses pdfplumber to extract Casing/Tubing/Liner tables
+            - Converts to Markdown format
+            - Extracts pipe_id (Inner Diameter) from ID columns
+            
+            **Pass 3 - Narrative (Section-Restricted):**
+            - Locates Geology/Lithology sections
+            - Extracts formation instabilities, gas peaks, drilling hazards
+            
             ### Architecture
             - **Vector DB**: ChromaDB (embedded)
             - **Embeddings**: nomic-embed-text (384 dims)
             - **LLM**: Ollama (llama3/llama3.1)
-            - **PDF Processing**: PyMuPDF
+            - **PDF Processing**: PyMuPDF + pdfplumber (tables)
             
             ### Usage Tips
             1. Upload PDF completion reports in the "Document Upload" tab
             2. Wait for indexing to complete (20-40 seconds for typical reports)
             3. Switch to "Query Interface" and select appropriate mode
             4. For extraction, include well name in your query (e.g., "ADK-GT-01")
+            5. For detailed summaries, use keywords: "End of Well", "EOW", "detailed", or "professional"
             
             ### Validation Rules
             - MD ≥ TVD (±1m tolerance)
