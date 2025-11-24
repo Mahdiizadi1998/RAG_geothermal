@@ -201,25 +201,55 @@ class PreprocessingAgent:
         return chunks
     
     def _segment_sentences_spacy(self, text: str) -> List[str]:
-        """Segment text into sentences using spaCy with technical term awareness"""
-        doc = self.nlp(text)
+        """Segment text into sentences using spaCy with technical term awareness
+        Processes in batches to avoid memory issues"""
         sentences = []
         
-        for sent in doc.sents:
-            sent_text = sent.text.strip()
-            if not sent_text:
-                continue
+        # Process in smaller batches to avoid memory issues (max 100KB per batch)
+        max_batch_size = 100000  # 100KB
+        if len(text) > max_batch_size:
+            # Split text into smaller chunks at paragraph boundaries
+            paragraphs = text.split('\n\n')
+            current_batch = ""
             
-            # Check if sentence contains critical technical info that should stay together
-            # Keep sentences with measurements, pipe specs, depths together
-            has_technical = any([
-                re.search(r'\b(?:TVD|MD|measured depth|true vertical depth)\b', sent_text, re.IGNORECASE),
-                re.search(r'\d+(?:\.\d+)?\s*(?:m|ft|inch|mm)\b', sent_text),  # Measurements
-                re.search(r'\b(?:casing|tubing|pipe)\s+\d+', sent_text, re.IGNORECASE),  # Pipe specs
-                re.search(r'\d+(?:\.\d+)?\s*(?:lb/ft|kg/m)', sent_text),  # Weight specs
-            ])
+            for para in paragraphs:
+                if len(current_batch) + len(para) > max_batch_size and current_batch:
+                    # Process current batch
+                    try:
+                        doc = self.nlp(current_batch)
+                        for sent in doc.sents:
+                            sent_text = sent.text.strip()
+                            if sent_text:
+                                sentences.append(sent_text)
+                    except Exception as e:
+                        logger.warning(f"SpaCy batch processing failed, using simple segmentation: {str(e)}")
+                        sentences.extend(self._segment_sentences_simple(current_batch))
+                    current_batch = para
+                else:
+                    current_batch += "\n\n" + para if current_batch else para
             
-            sentences.append(sent_text)
+            # Process remaining batch
+            if current_batch:
+                try:
+                    doc = self.nlp(current_batch)
+                    for sent in doc.sents:
+                        sent_text = sent.text.strip()
+                        if sent_text:
+                            sentences.append(sent_text)
+                except Exception as e:
+                    logger.warning(f"SpaCy batch processing failed, using simple segmentation: {str(e)}")
+                    sentences.extend(self._segment_sentences_simple(current_batch))
+        else:
+            # Text is small enough, process directly
+            try:
+                doc = self.nlp(text)
+                for sent in doc.sents:
+                    sent_text = sent.text.strip()
+                    if sent_text:
+                        sentences.append(sent_text)
+            except Exception as e:
+                logger.warning(f"SpaCy processing failed, using simple segmentation: {str(e)}")
+                sentences = self._segment_sentences_simple(text)
         
         return sentences
     

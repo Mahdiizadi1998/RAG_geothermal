@@ -416,6 +416,8 @@ class IngestionAgent:
                         table['page']
                     )
                     if general_data:
+                        # Remove source_page before passing to add_or_get_well (not a wells table column)
+                        general_data.pop('source_page', None)
                         # Update well with general data
                         self.db.add_or_get_well(primary_well, **general_data)
                         stored_count += 1

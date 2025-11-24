@@ -5,7 +5,7 @@ Verifies factual claims in LLM responses against source documents.
 
 import re
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import requests
 from dataclasses import dataclass
 
