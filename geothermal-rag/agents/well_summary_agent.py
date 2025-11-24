@@ -232,7 +232,7 @@ Header Text:
 
 Extract these fields (return "null" if not found):
 1. Operator Name (company drilling the well)
-2. Well Name (e.g., ADK-GT-01)
+2. Well Name (e.g., [WELL-ID-##])
 3. Rig Name (drilling rig used)
 
 Return your answer as valid JSON only, no other text:
@@ -263,7 +263,7 @@ JSON response:"""
             'rig_name': None
         }
         
-        # Well name pattern (e.g., ADK-GT-01)
+        # Well name pattern (e.g., [CODE]-GT-##)
         well_pattern = r'\b([A-Z]{2,10}-GT-\d{2}(?:-S\d+)?)\b'
         well_match = re.search(well_pattern, text)
         if well_match:
@@ -422,10 +422,10 @@ For each row in the table, extract these fields:
 Return ONLY valid JSON array, no other text:
 [
     {{
-        "size": "9 5/8 inch",
-        "weight": 53.5,
-        "depth": 1234.5,
-        "pipe_id": 8.535
+        "size": "[size] inch",
+        "weight": [number],
+        "depth": [number],
+        "pipe_id": [number]
     }},
     ...
 ]

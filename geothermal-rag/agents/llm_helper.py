@@ -205,7 +205,7 @@ CRITICAL INSTRUCTIONS:
 
 2. ANSWER FORMAT:
    - Start with direct answer to the question
-   - Include ALL relevant numbers with units (e.g., "2642 m MD", "9 5/8 inch")
+   - Include ALL relevant numbers with units (e.g., "[depth] m MD", "[size] inch")
    - Cite specific sections: "According to [document name], page X..."
    - If multiple sources mention the same fact, cite all
 
@@ -255,12 +255,12 @@ Answer (grounded strictly in context):"""
    - EVERY operator/well name MUST have a citation
    
    Examples of CORRECT citation format:
-   ✓ "The ADK-GT-01 well reached 2667.5m MD and 2358m TVD [Source: NLOG_GS_PUB_EOWR ADK-GT-01 SODM v1.1.pdf, Page 12]"
-   ✓ "A 9 5/8 inch casing with 53.5 lb/ft weight was set at 2642m MD [Source: completion_report.pdf, Page 8]"
-   ✓ "Drilling commenced on January 15, 2017 [Source: operations_log.pdf, Page 3]"
+   ✓ "The [well_name] well reached [depth1]m MD and [depth2]m TVD [Source: [filename].pdf, Page XX]"
+   ✓ "A [size] inch casing with [weight] lb/ft weight was set at [depth]m MD [Source: completion_report.pdf, Page XX]"
+   ✓ "Drilling commenced on [date] [Source: operations_log.pdf, Page XX]"
    
-   ✗ WRONG: "The well reached 2667.5m MD" (missing citation)
-   ✗ WRONG: "Casing installed at 2642m" (missing citation)
+   ✗ WRONG: "The well reached [depth]m MD" (missing citation)
+   ✗ WRONG: "Casing installed at [depth]m" (missing citation)
    
    Format: [Source: EXACT_FILENAME.pdf, Page XX]"""
         
@@ -287,9 +287,9 @@ STRICT REQUIREMENTS:
      ⚠️ CRITICAL: MD (Measured Depth) is ALWAYS ≥ TVD (True Vertical Depth)
      MD = length along wellbore path, TVD = straight vertical depth
      In vertical wells: MD ≈ TVD. In deviated wells: MD > TVD
-     Example: "2667.5m MD, 2358m TVD" ✓ CORRECT (MD > TVD)
-     Example: "2358m MD, 2667.5m TVD" ✗ WRONG (TVD cannot exceed MD)
-   - Casing program: EXACT specifications (e.g., "9 5/8 inch, 53.5 lb/ft, L80, set at 2642m MD")
+     Example: "[higher_depth]m MD, [lower_depth]m TVD" ✓ CORRECT (MD > TVD)
+     Example: "[lower_depth]m MD, [higher_depth]m TVD" ✗ WRONG (TVD cannot exceed MD)
+   - Casing program: EXACT specifications (e.g., "[size] inch, [weight] lb/ft, [grade], set at [depth]m MD")
    - Key operations mentioned (drilling, completion, testing) with dates
    - Equipment used (exact names/types from content)
    - Measurements, test results, or findings with exact units
@@ -299,7 +299,7 @@ STRICT REQUIREMENTS:
 4. FORMAT:
    - Write as continuous technical prose (not bullet points)
    - Use exact units from content (m, inch, bar, ft, etc.)
-   - Preserve all significant figures (e.g., "2667.5 m" not "2668 m")
+   - Preserve all significant figures (e.g., "[depth] m" not "[rounded_depth] m")
    - Name specific formations, zones, or targets if mentioned
    - Include well name prominently{citation_text}
 

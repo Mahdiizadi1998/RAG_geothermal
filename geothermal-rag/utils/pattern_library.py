@@ -14,14 +14,14 @@ class PatternLibrary:
     # ============================================================================
     
     # Pattern: Space-separated MD, TVD, Inclination
-    # Example: "1234.5  1230.2  2.5"
+    # Example: "[md]  [tvd]  [inc]"
     TRAJECTORY_SPACE_SEPARATED = re.compile(
         r'(\d{1,5}\.?\d*)\s+(\d{1,5}\.?\d*)\s+(\d{1,2}\.?\d*)',
         re.MULTILINE
     )
     
     # Pattern: Pipe-separated trajectory table
-    # Example: "| 1234.5 | 1230.2 | 2.5 |"
+    # Example: "| [md] | [tvd] | [inc] |"
     TRAJECTORY_PIPE_SEPARATED = re.compile(
         r'\|\s*(\d{1,5}\.?\d*)\s*\|\s*(\d{1,5}\.?\d*)\s*\|\s*(\d{1,2}\.?\d*)\s*\|',
         re.MULTILINE
@@ -74,7 +74,7 @@ class PatternLibrary:
     # ============================================================================
     
     # Pattern: Dutch geothermal well names
-    # Example: "ADK-GT-01", "ADK-GT-01-S1", "RNAU-GT-02"
+    # Example: "[CODE]-GT-##", "[CODE]-GT-##-S#", "[CODE2]-GT-##"
     WELL_NAME = re.compile(
         r'\b([A-Z]{2,10}-GT-\d{2}(?:-S\d+)?)\b'
     )

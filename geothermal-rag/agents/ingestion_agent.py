@@ -210,9 +210,9 @@ class IngestionAgent:
         Extract well names from text using regex
         
         Handles formats like:
-        - ADK-GT-01
-        - ADK-GT-01-S1 (sidetrack)
-        - RNAU-GT-02
+        - [CODE]-##
+        - [CODE]-##-S# (sidetrack)
+        - [CODE]-##
         """
         matches = self.well_name_pattern.findall(text)
         

@@ -116,7 +116,7 @@ def test_pattern_library():
     casing_text = """
     20" casing from 0 to 650 m, ID 19.124"
     13 3/8" casing from 650 to 1500 m, ID 12.615"
-    9 5/8" liner from 1500 to 2500 m, ID 8.535"
+    [size]" liner from 1500 to 2500 m, ID [number]"
     """
     
     casing = PatternLibrary.extract_casing_design(casing_text)

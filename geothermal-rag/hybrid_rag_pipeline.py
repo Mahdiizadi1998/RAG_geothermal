@@ -579,7 +579,7 @@ if __name__ == "__main__":
     )
     
     # Example query
-    query = "What is the pipe ID of the 9 5/8 inch casing?"
+    query = "What is the pipe ID of the [size] inch casing?"
     results = vector_store.query_hybrid(
         query=query,
         embedder=parser.embedder,

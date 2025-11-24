@@ -25,7 +25,7 @@ print("DEMO 1: Pattern Extraction from Text")
 print("-" * 70)
 
 sample_trajectory_text = """
-DIRECTIONAL SURVEY - ADK-GT-01
+DIRECTIONAL SURVEY - [WELL-NAME]
 
 MD (m)    TVD (m)    Inc (deg)
 0.0       0.0        0.0
@@ -41,7 +41,7 @@ CASING DESIGN:
 
 20" conductor casing from 0 to 650 m, ID 19.124"
 13 3/8" surface casing from 650 to 1500 m, ID 12.615"
-9 5/8" production liner from 1500 to 2667 m, ID 8.535"
+[size]" production liner from 1500 to [depth] m, ID [number]"
 """
 
 print("\n📄 Sample Trajectory Text:")
@@ -90,12 +90,12 @@ validator = ValidationAgent()
 
 # Create sample extracted data
 extracted_data = {
-    'well_name': 'ADK-GT-01',
+    'well_name': '[WELL-NAME]',
     'trajectory': [
         {'md': 0, 'tvd': 0, 'inclination': 0, 'pipe_id': 0.486},
         {'md': 650, 'tvd': 649, 'inclination': 2.5, 'pipe_id': 0.320},
         {'md': 1500, 'tvd': 1485, 'inclination': 5.8, 'pipe_id': 0.217},
-        {'md': 2667, 'tvd': 2600, 'inclination': 10.5, 'pipe_id': 0.217}
+        {'md': 2700, 'tvd': 2600, 'inclination': 10.5, 'pipe_id': 0.217}  # Generic depths
     ],
     'casing_design': casing_design,
     'pvt_data': {
@@ -143,7 +143,7 @@ print("-" * 70)
 nodal_runner = NodalAnalysisRunner()
 
 print("\n⚙️  Formatted trajectory for nodal analysis:")
-print(f"   Total depth: 2667m")
+print(f"   Total depth: {merged[-1]['md']:.0f}m")
 print(f"   Fluid density: 1050 kg/m³")
 print(f"   Points: {len(merged)}")
 

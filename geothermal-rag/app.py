@@ -950,7 +950,7 @@ def create_ui():
                     )
                     query_input = gr.Textbox(
                         label="Your Question",
-                        placeholder="e.g., What is the total depth of well ADK-GT-01?",
+                        placeholder="e.g., What is the total depth of well [WELL-NAME]?",
                         lines=3
                     )
                     
@@ -965,10 +965,10 @@ def create_ui():
                     - **Extract & Analyze**: Extract trajectory/casing data for review
                     
                     **Example queries:**
-                    - Q&A: "What is the casing design for ADK-GT-01?"
+                    - Q&A: "What is the casing design for [WELL-NAME]?"
                     - Summary: "Summarize the completion report in 300 words"
                     - Summary (Detailed): "Generate detailed End of Well Summary" or "Professional completion report summary"
-                    - Extract: "Extract trajectory data for ADK-GT-01"
+                    - Extract: "Extract trajectory data for [WELL-NAME]"
                     
                     **✨ NEW: 3-Pass End of Well Summary**
                     Use keywords like "End of Well", "EOW", "detailed", "professional", or "completion report" to activate:
@@ -1065,7 +1065,7 @@ def create_ui():
             1. Upload PDF completion reports in the "Document Upload" tab
             2. Wait for indexing to complete (20-40 seconds for typical reports)
             3. Switch to "Query Interface" and select appropriate mode
-            4. For extraction, include well name in your query (e.g., "ADK-GT-01")
+            4. For extraction, include well name in your query (e.g., "[WELL-NAME]")
             5. For detailed summaries, use keywords: "End of Well", "EOW", "detailed", or "professional"
             
             ### Validation Rules

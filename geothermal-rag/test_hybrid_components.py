@@ -42,7 +42,7 @@ def test_database_manager():
         casing_id = db.add_casing_string('TEST-GT-01', {
             'string_number': 1,
             'outer_diameter': 13.375,
-            'weight': 53.5,
+            'weight': 50.0,
             'grade': 'L80',
             'bottom_depth_md': 2500.0,
             'source_page': 8
@@ -98,7 +98,7 @@ def test_table_parser():
         # Test casing table identification
         casing_headers = ['Size', 'Weight', 'Grade', 'Depth']
         casing_rows = [
-            ['13 3/8"', '53.5 lb/ft', 'L80', '2500m'],
+            ['13 3/8"', '50.0 lb/ft', 'L80', '2500m'],
             ['9 5/8"', '47 lb/ft', 'L80', '3000m']
         ]
         
@@ -114,7 +114,7 @@ def test_table_parser():
         parsed_casing = parser.parse_casing_table(casing_headers, casing_rows, page=8)
         assert len(parsed_casing) == 2, f"Expected 2 casing strings, got {len(parsed_casing)}"
         assert parsed_casing[0]['outer_diameter'] == 13.375, "Failed to parse fraction 13 3/8"
-        assert parsed_casing[0]['weight'] == 53.5, "Failed to parse weight"
+        assert parsed_casing[0]['weight'] == 50.0, "Failed to parse weight"
         assert parsed_casing[0]['bottom_depth_md'] == 2500.0, "Failed to parse depth"
         logger.info(f"✓ Parsed casing table: {len(parsed_casing)} strings")
         logger.info(f"  - String 1: {parsed_casing[0]['outer_diameter']} inch, {parsed_casing[0]['weight']} lb/ft")
@@ -173,7 +173,7 @@ def test_template_selector():
         )
         db.add_casing_string('TEST-GT-02', {
             'outer_diameter': 13.375,
-            'weight': 53.5,
+            'weight': 50.0,
             'grade': 'L80',
             'bottom_depth_md': 3000.0
         })
@@ -314,7 +314,7 @@ def test_integration():
         casing_data = [
             {
                 'outer_diameter': 13.375,
-                'weight': 53.5,
+                'weight': 50.0,
                 'grade': 'L80',
                 'bottom_depth_md': 2800.0,
                 'source_page': 8

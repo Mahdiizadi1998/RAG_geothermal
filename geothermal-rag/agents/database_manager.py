@@ -38,8 +38,11 @@ class WellDatabaseManager:
         logger.info(f"Initialized well database at {self.db_path}")
     
     def _create_schema(self):
-        """Create database schema for well data"""
+        """Create database schema for well data with automatic migration"""
         cursor = self.conn.cursor()
+        
+        # Check if migration is needed
+        self._migrate_if_needed(cursor)
         
         # Wells table - core information
         cursor.execute("""
@@ -212,6 +215,85 @@ class WellDatabaseManager:
         
         self.conn.commit()
         logger.info("Database schema created successfully")
+    
+    def _migrate_if_needed(self, cursor):
+        """Check if old schema exists and migrate to new schema"""
+        try:
+            # Check if casing_strings table exists and has old schema
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='casing_strings'")
+            result = cursor.fetchone()
+            
+            if result and 'pipe_id_nominal' not in result[0]:
+                logger.warning("⚠️  Old database schema detected - applying migration...")
+                
+                # Add missing columns to casing_strings
+                try:
+                    cursor.execute("ALTER TABLE casing_strings ADD COLUMN pipe_id_nominal REAL")
+                    logger.info("  ✓ Added pipe_id_nominal")
+                except sqlite3.OperationalError:
+                    pass
+                
+                try:
+                    cursor.execute("ALTER TABLE casing_strings ADD COLUMN pipe_id_drift REAL")
+                    logger.info("  ✓ Added pipe_id_drift")
+                except sqlite3.OperationalError:
+                    pass
+                
+                try:
+                    cursor.execute("ALTER TABLE casing_strings ADD COLUMN id_unit TEXT DEFAULT 'inch'")
+                    logger.info("  ✓ Added id_unit")
+                except sqlite3.OperationalError:
+                    pass
+                
+                # Check and add wells table columns
+                cursor.execute("PRAGMA table_info(wells)")
+                wells_cols = [row[1] for row in cursor.fetchall()]
+                
+                wells_migrations = [
+                    ('license_number', 'TEXT'),
+                    ('coordinate_x', 'REAL'),
+                    ('coordinate_y', 'REAL'),
+                    ('coordinate_system', 'TEXT'),
+                    ('rig_name', 'TEXT'),
+                    ('target_formation', 'TEXT'),
+                    ('end_of_operations', 'TEXT'),
+                    ('total_days', 'INTEGER'),
+                    ('sidetrack_start_depth_md', 'REAL')
+                ]
+                
+                for col_name, col_type in wells_migrations:
+                    if col_name not in wells_cols:
+                        try:
+                            cursor.execute(f"ALTER TABLE wells ADD COLUMN {col_name} {col_type}")
+                            logger.info(f"  ✓ Added wells.{col_name}")
+                        except sqlite3.OperationalError:
+                            pass
+                
+                # Check cementing table
+                cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='cementing'")
+                cement_result = cursor.fetchone()
+                
+                if cement_result and 'lead_volume' not in cement_result[0]:
+                    cement_migrations = [
+                        ('lead_volume', 'REAL'),
+                        ('lead_density', 'REAL'),
+                        ('tail_volume', 'REAL'),
+                        ('tail_density', 'REAL'),
+                        ('toc_tvd', 'REAL')
+                    ]
+                    
+                    for col_name, col_type in cement_migrations:
+                        try:
+                            cursor.execute(f"ALTER TABLE cementing ADD COLUMN {col_name} {col_type}")
+                            logger.info(f"  ✓ Added cementing.{col_name}")
+                        except sqlite3.OperationalError:
+                            pass
+                
+                self.conn.commit()
+                logger.info("✅ Migration complete!")
+                
+        except Exception as e:
+            logger.error(f"Migration check failed: {str(e)}")
     
     def add_or_get_well(self, well_name: str, **kwargs) -> int:
         """
