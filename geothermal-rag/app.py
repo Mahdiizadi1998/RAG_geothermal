@@ -24,8 +24,23 @@ from agents.ensemble_judge_agent import EnsembleJudgeAgent
 from agents.llm_helper import OllamaHelper
 from models.nodal_runner import NodalAnalysisRunner
 
+# Import new validation agents
+from agents.query_analysis_agent import QueryAnalysisAgent
+from agents.fact_verification_agent import FactVerificationAgent
+from agents.physical_validation_agent import PhysicalValidationAgent
+from agents.missing_data_agent import MissingDataAgent
+from agents.confidence_scorer import ConfidenceScorerAgent
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Log Gradio version for troubleshooting
+try:
+    import importlib.metadata
+    gradio_version = importlib.metadata.version('gradio')
+    logger.info(f"Gradio version: {gradio_version}")
+except Exception:
+    logger.warning("Could not determine Gradio version")
 
 
 class GeothermalRAGSystem:
@@ -62,8 +77,16 @@ class GeothermalRAGSystem:
         self.llm = OllamaHelper(config_path)
         self.nodal_runner = NodalAnalysisRunner()
         
+        # Initialize new validation agents
+        self.query_analyzer = QueryAnalysisAgent(self.config)
+        self.fact_verifier = FactVerificationAgent(self.config)
+        self.physical_validator = PhysicalValidationAgent(self.config)
+        self.missing_data_agent = MissingDataAgent(self.config)
+        self.confidence_scorer = ConfidenceScorerAgent(self.config)
+        
         # Store pending extraction for confirmation
         self.pending_extraction = None
+        self.pending_clarifications = []  # Store clarification questions
         
         self.indexed_documents = []
         self.llm_available = self.llm.is_available()
@@ -186,7 +209,11 @@ class GeothermalRAGSystem:
             return f"❌ Error processing query: {str(e)}", str(e)
     
     def _handle_qa(self, query: str) -> Tuple[str, str]:
-        """Handle Q&A queries with LLM-generated answers"""
+        """Handle Q&A queries with LLM-generated answers and fact verification"""
+        # Analyze query
+        query_analysis = self.query_analyzer.analyze(query)
+        logger.info(f"Query type: {query_analysis.query_type}, Priority: {query_analysis.priority}")
+        
         # Get conversation context for better answers
         context = self.memory.get_context_string(last_n=3)
         
@@ -195,17 +222,53 @@ class GeothermalRAGSystem:
         if context:
             enhanced_query = f"{context}\n\nCurrent question: {query}"
         
-        # Retrieve relevant chunks
-        retrieval_result = self.rag.retrieve(enhanced_query, mode='qa')
+        # Retrieve relevant chunks using hybrid granularity (multiple chunk sizes)
+        retrieval_result = self.rag.retrieve_hybrid_granularity(enhanced_query, mode='qa')
         chunks = retrieval_result['chunks']
+        logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
         
         if not chunks:
             return "⚠️ No relevant information found in documents", ""
         
+        # Calculate source quality
+        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=5)
+        
         # Generate answer using LLM if available
         if self.llm_available:
             try:
+                logger.info("⏳ Generating answer with LLM...")
                 answer = self.llm.generate_answer(query, chunks)
+                
+                # Fact verification
+                logger.info("⏳ Verifying facts...")
+                verification = self.fact_verifier.verify(answer, chunks)
+                
+                # Calculate confidence
+                confidence = self.confidence_scorer.calculate_confidence(
+                    source_quality=source_quality,
+                    fact_verification=verification.overall_confidence,
+                    consistency=0.85,  # Default - no extraction to check
+                    context={'query_type': 'qa'}
+                )
+                
+                # Build response with warnings
+                response_parts = []
+                
+                # Add confidence header
+                if confidence.recommendation == 'high':
+                    response_parts.append("✅ **HIGH CONFIDENCE ANSWER**\n")
+                elif confidence.recommendation == 'review':
+                    response_parts.append("⚠️ **REVIEW RECOMMENDED** - Verify before critical use\n")
+                else:
+                    response_parts.append("⚠️ **LOW CONFIDENCE** - Results may be unreliable\n")
+                
+                response_parts.append(answer)
+                
+                # Add verification warnings
+                if verification.warnings:
+                    response_parts.append("\n\n**⚠️ Verification Warnings:**")
+                    for warning in verification.warnings:
+                        response_parts.append(f"- {warning}")
                 
                 # Add sources
                 sources = "\n\n**Sources:**\n"
@@ -220,16 +283,19 @@ class GeothermalRAGSystem:
                         sources += f"- {source}, pages {page_str}\n"
                         seen_sources.add(source_key)
                 
-                response_text = answer + sources
+                response_parts.append(sources)
                 
-                # Evaluate response quality
-                quality = self.judge.evaluate_response(query, response_text, chunks)
+                # Add confidence breakdown
+                response_parts.append(f"\n**Confidence Assessment:**\n{confidence.explanation}")
+                
+                response_text = "\n".join(response_parts)
                 
                 # Debug info
                 debug_info = f"Retrieved {len(chunks)} chunks\n"
-                debug_info += f"Generated answer using LLM ({self.llm.model})\n"
-                debug_info += f"Quality score: {quality['quality_score']:.2f}\n"
-                debug_info += f"Relevance: {quality['relevance']}\n"
+                debug_info += f"Generated answer using LLM ({self.llm.model_qa})\n"
+                debug_info += f"Fact verification: {verification.support_rate*100:.0f}% claims supported\n"
+                debug_info += f"Overall confidence: {confidence.overall*100:.0f}%\n"
+                debug_info += f"Recommendation: {confidence.recommendation.upper()}\n"
                 
                 return response_text, debug_info
                 
@@ -259,46 +325,87 @@ class GeothermalRAGSystem:
         return response_text, debug_info
     
     def _handle_summary(self, query: str) -> Tuple[str, str]:
-        """Handle document summarization with word count control"""
-        # Extract target word count from query (e.g., "summarize in 200 words")
-        import re
-        word_count_match = re.search(r'(\d+)\s*words?', query.lower())
-        target_words = int(word_count_match.group(1)) if word_count_match else 200
+        """Handle document summarization with STRICT word count control"""
+        # Analyze query
+        query_analysis = self.query_analyzer.analyze(query)
+        
+        # Extract target word count (use analysis result or default)
+        target_words = query_analysis.target_word_count
+        if target_words is None:
+            target_words = self.config.get('summarization', {}).get('default_words', 200)
+        
+        logger.info(f"📝 Generating summary: {target_words} words (strict)")
         
         # Ensure reasonable range
-        target_words = max(100, min(target_words, 1000))
+        target_words = max(50, min(target_words, 1000))
         
-        # Extract focus area from query (e.g., "summarize trajectory data")
-        focus = None
-        focus_keywords = ['trajectory', 'casing', 'equipment', 'pvt', 'fluid properties']
-        for keyword in focus_keywords:
-            if keyword in query.lower():
-                focus = keyword
-                break
+        # Extract focus area from query analysis
+        focus = ', '.join(query_analysis.detected_focus) if query_analysis.detected_focus else None
         
-        # Retrieve summary-sized chunks
-        retrieval_result = self.rag.retrieve(query, mode='summary')
+        # Retrieve chunks using hybrid granularity (multiple chunk sizes for comprehensive summary)
+        retrieval_result = self.rag.retrieve_hybrid_granularity(query, mode='summary')
         chunks = retrieval_result['chunks']
+        logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
         
         if not chunks:
             return "⚠️ No content found for summarization", ""
         
+        # Calculate source quality
+        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=10)
+        
         # Generate summary using LLM if available
         if self.llm_available:
             try:
+                logger.info("⏳ Generating summary with strict word count enforcement...")
                 summary = self.llm.generate_summary(chunks, target_words, focus)
+                
+                # Count actual words
+                actual_words = len(summary.split())
+                logger.info(f"✓ Generated {actual_words} words (target: {target_words})")
+                
+                # Calculate confidence
+                confidence = self.confidence_scorer.calculate_confidence(
+                    source_quality=source_quality,
+                    completeness=0.9,  # High for summaries
+                    consistency=0.85,
+                    context={'query_type': 'summary', 'word_count': actual_words}
+                )
+                
+                # Build response with metadata
+                response_parts = []
+                
+                # Add confidence header
+                if confidence.recommendation == 'high':
+                    response_parts.append("✅ **HIGH CONFIDENCE SUMMARY**\n")
+                elif confidence.recommendation == 'review':
+                    response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
+                else:
+                    response_parts.append("⚠️ **LOW CONFIDENCE**\n")
+                
+                response_parts.append(summary)
+                
+                # Add warnings if any
+                if confidence.warnings:
+                    response_parts.append("\n\n**⚠️ Warnings:**")
+                    for warning in confidence.warnings:
+                        response_parts.append(f"- {warning}")
                 
                 # Add metadata
                 sources = set(chunk['metadata'].get('source_file', 'unknown') for chunk in chunks[:10])
-                metadata = f"\n\n---\n*Summary of {', '.join(sources)} ({len(chunks)} sections, ~{target_words} words)*"
+                metadata = f"\n\n---\n*Summary of {', '.join(sources)} ({len(chunks)} sections, {actual_words} words)*"
+                response_parts.append(metadata)
                 
-                summary_text = summary + metadata
+                # Add confidence breakdown
+                response_parts.append(f"\n**Confidence Assessment:**\n{confidence.explanation}")
+                
+                summary_text = "\n".join(response_parts)
                 
                 # Debug info
                 debug_info = f"Summarized from {len(chunks)} chunks\n"
-                debug_info += f"Target words: {target_words}\n"
+                debug_info += f"Target words: {target_words}, Actual: {actual_words}\n"
                 debug_info += f"Focus: {focus or 'general'}\n"
-                debug_info += f"Generated using LLM ({self.llm.model})\n"
+                debug_info += f"Generated using LLM ({self.llm.model_summary})\n"
+                debug_info += f"Confidence: {confidence.overall*100:.0f}%\n"
                 
                 return summary_text, debug_info
                 
@@ -332,7 +439,7 @@ class GeothermalRAGSystem:
         return summary_text, debug_info
     
     def _handle_extraction(self, query: str) -> Tuple[str, str]:
-        """Handle parameter extraction only (no nodal analysis yet)"""
+        """Handle parameter extraction with comprehensive validation and clarification"""
         # Extract well name from query
         well_name = self._extract_well_name(query)
         
@@ -340,8 +447,8 @@ class GeothermalRAGSystem:
         cached = self.memory.get_cached_extraction(well_name) if well_name else None
         
         if not cached:
-            # Two-phase retrieval
-            logger.info("Performing two-phase retrieval...")
+            # Two-phase retrieval with increased chunks for better data extraction
+            logger.info("Performing two-phase retrieval with high chunk counts...")
             
             query1 = f"trajectory survey directional {well_name or ''}"
             query2 = f"casing design well schematic pipe ID {well_name or ''}"
@@ -349,7 +456,8 @@ class GeothermalRAGSystem:
             retrieval_result = self.rag.retrieve_two_phase(
                 query1, query2,
                 mode1='extract', mode2='summary',
-                top_k1=15, top_k2=10,
+                top_k1=40,  # Increased from 15 for better trajectory coverage
+                top_k2=30,  # Increased from 10 for better casing data
                 well_name=well_name
             )
             
@@ -370,9 +478,37 @@ class GeothermalRAGSystem:
             extracted_data = cached
             extraction_log = cached.get('extraction_log', [])
         
-        # Validate
-        logger.info("Validating extracted data...")
+        # Step 1: Basic validation
+        logger.info("⏳ Validating extracted data...")
         validation_result = self.validation.validate(extracted_data)
+        
+        # Step 2: Physical validation
+        logger.info("⏳ Running physical validation...")
+        trajectory_data = []
+        for point in extracted_data.get('trajectory', []):
+            trajectory_data.append({
+                'MD': point.get('md', 0),
+                'TVD': point.get('tvd', 0),
+                'ID': point.get('pipe_id', 0)  # Already in inches
+            })
+        
+        physical_validation = self.physical_validator.validate_trajectory(trajectory_data)
+        
+        # Step 3: Completeness assessment
+        logger.info("⏳ Assessing data completeness...")
+        completeness = self.missing_data_agent.assess_completeness(extracted_data)
+        
+        # Step 4: Calculate confidence
+        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=10)
+        consistency = self.confidence_scorer.calculate_consistency(extracted_data)
+        
+        confidence = self.confidence_scorer.calculate_confidence(
+            source_quality=source_quality,
+            completeness=completeness.completeness_score,
+            consistency=consistency,
+            physical_validity=physical_validation.confidence,
+            context={'query_type': 'extraction'}
+        )
         
         # Apply defaults if needed
         if validation_result['suggestions'] and not validation_result['critical_errors']:
@@ -380,30 +516,38 @@ class GeothermalRAGSystem:
         
         # Store for potential nodal analysis
         self.pending_extraction = extracted_data
+        self.pending_clarifications = completeness.clarification_questions
         
-        # Build response
+        # Build comprehensive response
         response_parts = []
         response_parts.append(f"# Extraction Results for {extracted_data.get('well_name', 'Unknown Well')}\n")
-        response_parts.append(f"\n**Confidence: {extracted_data.get('confidence', 0):.0%}**\n")
+        
+        # Confidence header
+        if confidence.recommendation == 'high':
+            response_parts.append("✅ **HIGH CONFIDENCE EXTRACTION**\n")
+        elif confidence.recommendation == 'review':
+            response_parts.append("⚠️ **REVIEW REQUIRED BEFORE USE**\n")
+        else:
+            response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY ALL DATA**\n")
         
         # Trajectory summary
         trajectory = extracted_data.get('trajectory', [])
         if trajectory:
             response_parts.append(f"\n## Trajectory Data")
             response_parts.append(f"Points extracted: {len(trajectory)}")
-            response_parts.append(f"Depth range: {trajectory[0]['md']:.1f} - {trajectory[-1]['md']:.1f} m")
+            response_parts.append(f"Depth range: {trajectory[0]['md']:.1f} - {trajectory[-1]['md']:.1f} m MD")
             response_parts.append(f"\nFirst 5 points:")
             for i, point in enumerate(trajectory[:5], 1):
                 response_parts.append(
                     f"  {i}. MD: {point['md']:.1f}m, TVD: {point['tvd']:.1f}m, "
-                    f"Inc: {point['inclination']:.1f}°, ID: {point['pipe_id']*1000:.1f}mm"
+                    f"Inc: {point['inclination']:.1f}°, ID: {point['pipe_id']:.2f}\""
                 )
             
             if len(trajectory) > 5:
                 response_parts.append(f"  ... ({len(trajectory) - 5} more points)")
             
             # Show full trajectory format for approval
-            response_parts.append(f"\n### Complete Trajectory Data Format:")
+            response_parts.append(f"\n### Complete Trajectory Data (for nodal analysis):")
             preview_code = self.nodal_runner.generate_preview_code(extracted_data)
             response_parts.append(f"```python\n{preview_code}\n```")
         
@@ -418,8 +562,28 @@ class GeothermalRAGSystem:
             if 'temp_gradient' in pvt:
                 response_parts.append(f"  • Temperature gradient: {pvt['temp_gradient']:.1f} °C/km")
         
-        # Validation report
-        response_parts.append(f"\n## Validation")
+        # Physical validation results
+        response_parts.append(f"\n## Physical Validation")
+        if physical_validation.is_valid:
+            response_parts.append("✓ All physical constraints satisfied")
+        else:
+            response_parts.append(f"✗ Physical violations detected:")
+            for violation in physical_validation.violations[:5]:  # Show top 5
+                response_parts.append(f"  • [{violation.severity.upper()}] {violation.description}")
+                response_parts.append(f"    → {violation.suggestion}")
+        
+        # Completeness assessment
+        response_parts.append(f"\n## Data Completeness")
+        response_parts.append(completeness.summary)
+        
+        # Show clarification questions if needed
+        if completeness.clarification_questions:
+            response_parts.append(f"\n### ⚠️ Clarification Needed:")
+            for i, question in enumerate(completeness.clarification_questions[:5], 1):
+                response_parts.append(f"  {i}. {question}")
+        
+        # Legacy validation report
+        response_parts.append(f"\n## Legacy Validation")
         if validation_result['valid']:
             response_parts.append("✓ All validations passed")
         else:
@@ -432,11 +596,30 @@ class GeothermalRAGSystem:
             for warning in validation_result['warnings']:
                 response_parts.append(f"  {warning}")
         
-        # Next steps
-        if validation_result['valid'] and trajectory:
-            response_parts.append(f"\n---")
-            response_parts.append(f"\n**✓ Data extraction successful!**")
-            response_parts.append(f"\nIf the trajectory data looks correct, click **'Run Nodal Analysis'** below to proceed.")
+        # Confidence breakdown
+        response_parts.append(f"\n## Confidence Assessment")
+        response_parts.append(confidence.explanation)
+        
+        if confidence.warnings:
+            response_parts.append(f"\n**⚠️ Overall Warnings:**")
+            for warning in confidence.warnings:
+                response_parts.append(f"- {warning}")
+        
+        # Next steps - ALWAYS ask for confirmation
+        response_parts.append(f"\n---")
+        if physical_validation.is_valid and not completeness.has_critical_gaps:
+            response_parts.append(f"\n**✓ Data extraction complete with {confidence.overall*100:.0f}% confidence**")
+            response_parts.append(f"\n⚠️ **IMPORTANT:** Review the extracted data above carefully.")
+            if completeness.clarification_questions:
+                response_parts.append(f"⚠️ **Consider answering the clarification questions** for better results.")
+            response_parts.append(f"\nIf the data looks correct, click **'Run Nodal Analysis'** below to proceed.")
+        else:
+            response_parts.append(f"\n**⚠️ Data has critical issues - address before analysis:**")
+            if not physical_validation.is_valid:
+                response_parts.append(f"  • Physical constraint violations detected")
+            if completeness.has_critical_gaps:
+                response_parts.append(f"  • Critical data missing")
+            response_parts.append(f"\nReview issues above and verify source documents.")
         
         # Debug info
         debug_info = "Extraction Log:\n"
@@ -519,12 +702,19 @@ class GeothermalRAGSystem:
 # ============================================================================
 
 def create_ui():
-    """Create Gradio interface"""
+    """Create Gradio UI"""
     
     # Initialize system
     system = GeothermalRAGSystem()
     
-    with gr.Blocks(title="RAG for Geothermal Wells", theme=gr.themes.Soft()) as app:
+    # Create Gradio app with theme if supported (Gradio >=4.0)
+    try:
+        app = gr.Blocks(title="RAG for Geothermal Wells", theme=gr.themes.Soft())
+    except TypeError:
+        # Fallback for older Gradio versions without theme support
+        app = gr.Blocks(title="RAG for Geothermal Wells")
+    
+    with app:
         gr.Markdown("# 🌋 RAG for Geothermal Wells")
         gr.Markdown("Intelligent document analysis for geothermal well completion reports")
         
@@ -664,7 +854,7 @@ def create_ui():
             
             ### Validation Rules
             - MD ≥ TVD (±1m tolerance)
-            - Pipe ID: 50-1000mm
+            - Pipe ID: 2-30 inches
             - Inclination: 0-90°
             - Well depth: 500-5000m (typical geothermal range)
             

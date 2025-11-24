@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from agents.parameter_extraction_agent import ParameterExtractionAgent
 from agents.validation_agent import ValidationAgent
-from models.nodal_analysis import NodalAnalysisModel
+from models.nodal_runner import NodalAnalysisRunner
 from utils.pattern_library import PatternLibrary
 from utils.unit_conversion import UnitConverter
 
@@ -134,58 +134,26 @@ for i, point in enumerate(merged[:5], 1):
           f"Inc: {point['inclination']:>5.1f}°, Pipe ID: {point['pipe_id']*1000:>6.1f}mm")
 
 # ============================================================================
-# DEMO 5: Nodal Analysis
+# DEMO 5: Nodal Analysis Format
 # ============================================================================
 print("\n" + "=" * 70)
-print("DEMO 5: Nodal Analysis")
+print("DEMO 5: Nodal Analysis Format")
 print("-" * 70)
 
-nodal = NodalAnalysisModel()
+nodal_runner = NodalAnalysisRunner()
 
-print("\n⚙️  Quick estimate for ADK-GT-01:")
-total_depth = 2667
-fluid_density = 1050
-avg_pipe_id = 0.217
+print("\n⚙️  Formatted trajectory for nodal analysis:")
+print(f"   Total depth: 2667m")
+print(f"   Fluid density: 1050 kg/m³")
+print(f"   Points: {len(merged)}")
 
-quick_result = nodal.quick_estimate(total_depth, fluid_density, avg_pipe_id)
-print(f"   Total depth: {total_depth}m")
-print(f"   Fluid density: {fluid_density} kg/m³")
-print(f"   Average pipe ID: {avg_pipe_id*1000:.1f}mm")
-print(f"\n   Results:")
-print(f"   • Hydrostatic pressure: {quick_result['hydrostatic_pressure_bar']:.1f} bar")
-print(f"   • Estimated flow rate: {quick_result['estimated_flow_rate_m3h']:.1f} m³/h")
-print(f"   • Estimated flow rate: {quick_result['estimated_flow_rate_bpd']:.0f} bpd")
+# Generate preview code
+preview_code = nodal_runner.generate_preview_code(extracted_data)
+print("\n📤 Python code format:")
+print(preview_code[:500] + "...")
+print("\n   ✓ Ready for execution in nodal_analysis.py")
 
-print("\n⚙️  Detailed pressure profile calculation:")
-profile = nodal.calculate_pressure_profile(
-    trajectory=merged[:4],  # Use first 4 points
-    fluid_density=fluid_density,
-    fluid_viscosity=0.0015,
-    flow_rate_m3s=0.05,  # 50 L/s = 180 m³/h
-    wellhead_pressure=100000  # 1 bar
-)
 
-if profile.get('success'):
-    print(f"   Wellhead pressure: {profile['wellhead_pressure_bar']:.2f} bar")
-    print(f"   Bottomhole pressure: {profile['bottomhole_pressure_bar']:.2f} bar")
-    print(f"   Pressure gain: {profile['total_pressure_gain_bar']:.2f} bar")
-    print(f"   Flow rate: {profile['flow_rate_m3h']:.1f} m³/h")
-    
-    print(f"\n   Pressure profile along wellbore:")
-    for i, p in enumerate(profile['profile'][:5], 1):
-        print(f"   {i}. MD: {p['md']:>7.1f}m, TVD: {p['tvd']:>7.1f}m, "
-              f"Pressure: {p['pressure_bar']:>6.2f} bar")
-
-# ============================================================================
-# DEMO 6: Format for Nodal Analysis
-# ============================================================================
-print("\n" + "=" * 70)
-print("DEMO 6: Export Format for Nodal Analysis")
-print("-" * 70)
-
-print("\n📤 Formatted Python code for nodal analysis:")
-formatted_code = extraction_agent.format_for_nodal_analysis(extracted_data)
-print(formatted_code)
 
 # ============================================================================
 # Summary
@@ -198,12 +166,18 @@ print("  ✓ Pattern extraction (trajectory & casing)")
 print("  ✓ Unit conversion (fractional inches → meters)")
 print("  ✓ Data validation (physics-based checks)")
 print("  ✓ Trajectory-casing merger")
-print("  ✓ Nodal analysis (pressure calculations)")
-print("  ✓ Export formatting")
+print("  ✓ Nodal analysis formatting")
+print("  ✓ Export to nodal_analysis.py format")
 print("\n🚀 The system is ready for use with PDF documents!")
 print("\nNote: To use with actual PDFs and RAG functionality, you need:")
 print("  1. Ollama installed and running (for embeddings and LLM)")
-print("  2. Models pulled: ollama pull llama3 && ollama pull nomic-embed-text")
+print("  2. Models pulled: ollama pull llama3 && ollama pull llama3.1 && ollama pull nomic-embed-text")
 print("  3. Run: python app.py")
+print("\n🎯 New validation features available:")
+print("  ✓ Query analysis with word count detection")
+print("  ✓ Fact verification with LLM (llama3.1)")
+print("  ✓ Physical validation (MD≥TVD, telescoping)")
+print("  ✓ Missing data detection with clarification questions")
+print("  ✓ Multi-dimensional confidence scoring")
 print("\nFor demo purposes, all extraction and analysis components work perfectly!")
 print("=" * 70)

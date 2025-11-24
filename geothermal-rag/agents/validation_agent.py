@@ -163,23 +163,22 @@ class ValidationAgent:
         return errors
     
     def _validate_pipe_ids(self, trajectory: List[Dict]) -> List[str]:
-        """Validate pipe IDs are within realistic range"""
+        """Validate pipe IDs are within realistic range (expects inches)"""
         errors = []
-        min_mm = self.validation_config['pipe_id_min_mm']
-        max_mm = self.validation_config['pipe_id_max_mm']
+        # Get inch ranges from config (fallback to old mm config if needed)
+        min_inches = self.validation_config.get('min_pipe_id', 2.0)
+        max_inches = self.validation_config.get('max_pipe_id', 30.0)
         
         for i, point in enumerate(trajectory):
             pipe_id = point.get('pipe_id')
             if pipe_id is None:
                 continue
             
-            # Convert to mm for comparison
-            pipe_id_mm = pipe_id * 1000
-            
-            if pipe_id_mm < min_mm or pipe_id_mm > max_mm:
+            # pipe_id is now in inches
+            if pipe_id < min_inches or pipe_id > max_inches:
                 errors.append(
-                    f"❌ Point {i+1}: Pipe ID ({pipe_id_mm:.1f}mm) out of range [{min_mm}-{max_mm}mm] - "
-                    f"likely unit conversion error"
+                    f"❌ Point {i+1}: Pipe ID ({pipe_id:.2f}\") out of range [{min_inches}-{max_inches}\"] - "
+                    f"check extraction accuracy"
                 )
         
         return errors

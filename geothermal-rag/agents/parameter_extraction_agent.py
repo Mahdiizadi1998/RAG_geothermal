@@ -55,8 +55,8 @@ class ParameterExtractionAgent:
             Dict with structure:
             {
                 'well_name': str,
-                'trajectory': List[Dict],  # [{'md': float, 'tvd': float, 'inc': float, 'pipe_id': float}]
-                'casing_design': List[Dict],  # [{'od': float, 'top_md': float, 'bottom_md': float, 'id': float}]
+                'trajectory': List[Dict],  # [{'md': float(m), 'tvd': float(m), 'inc': float(deg), 'pipe_id': float(inches)}]
+                'casing_design': List[Dict],  # [{'od': float(in), 'top_md': float(m), 'bottom_md': float(m), 'id': float(in)}]
                 'pvt_data': Dict,  # {'density': float, 'viscosity': float, ...}
                 'equipment': Dict,  # {'pump_type': str, ...}
                 'extraction_log': List[str],
@@ -235,11 +235,11 @@ class ParameterExtractionAgent:
         3. Interpolate pipe ID for trajectory points between casing strings
         
         Args:
-            trajectory: List of {'md', 'tvd', 'inclination'}
-            casing: List of {'od', 'top_md', 'bottom_md', 'id'}
+            trajectory: List of {'md', 'tvd', 'inclination'} (depths in meters)
+            casing: List of {'od', 'top_md', 'bottom_md', 'id'} (ID in inches)
             
         Returns:
-            List of {'md', 'tvd', 'inclination', 'pipe_id'} in meters
+            List of {'md', 'tvd', 'inclination', 'pipe_id'} (pipe_id in inches)
         """
         if not trajectory:
             self._log(log, "⚠️ No trajectory data to merge")
@@ -247,15 +247,15 @@ class ParameterExtractionAgent:
         
         if not casing:
             self._log(log, "⚠️ No casing data - using constant pipe ID")
-            # Use default pipe ID (assume 7" = 0.1778 m)
-            default_id = self.converter.inches_to_meters(6.276)  # 7" casing typical ID
+            # Use default pipe ID in inches (7" casing typical ID)
+            default_id_inches = 6.276  # 7" casing typical ID
             merged = []
             for point in trajectory:
                 merged.append({
                     'md': point['md'],
                     'tvd': point['tvd'],
                     'inclination': point['inclination'],
-                    'pipe_id': default_id
+                    'pipe_id': default_id_inches  # in inches
                 })
             return merged
         
@@ -271,14 +271,14 @@ class ParameterExtractionAgent:
             # Find trajectory point closest to casing top
             closest = min(trajectory, key=lambda t: abs(t['md'] - c['top_md']))
             
-            # Convert pipe ID from inches to meters
-            pipe_id_meters = self.converter.inches_to_meters(c['id'])
+            # Keep pipe ID in inches (standard for well engineering)
+            pipe_id_inches = c['id']
             
             casing_with_traj.append({
                 'md': c['top_md'],
                 'tvd': closest['tvd'],
                 'inclination': closest['inclination'],
-                'pipe_id': pipe_id_meters,
+                'pipe_id': pipe_id_inches,  # in inches
                 'bottom_md': c['bottom_md']
             })
         
@@ -386,16 +386,17 @@ class ParameterExtractionAgent:
         
         # Create well_trajectory in exact format specified
         code = "# Extracted trajectory data for nodal analysis\n"
-        code += "# Format: MD, TVD, ID are in meters\n\n"
+        code += "# Format: MD, TVD are in meters, ID converted from inches to meters\n\n"
         code += "well_trajectory = [\n"
         
         for point in trajectory:
             md = point['md']
             tvd = point['tvd']
-            pipe_id = point['pipe_id']
+            pipe_id_inches = point['pipe_id']  # stored in inches
+            pipe_id_meters = self.converter.inches_to_meters(pipe_id_inches)  # convert to meters for nodal analysis
             
             # Format with proper spacing to match target format
-            code += f'    {{"MD": {md:<7.1f}, "TVD": {tvd:<7.1f}, "ID": {pipe_id:.4f}}},\n'
+            code += f'    {{"MD": {md:<7.1f}, "TVD": {tvd:<7.1f}, "ID": {pipe_id_meters:.4f}}},\n'
         
         code += "]\n\n"
         

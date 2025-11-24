@@ -5,11 +5,13 @@ Implements vector search with ChromaDB and hybrid dense/sparse retrieval
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import OllamaEmbeddingFunction
 from typing import Dict, List, Optional
 import logging
 import yaml
 from pathlib import Path
 import hashlib
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +45,17 @@ class RAGRetrievalAgent:
         self.vector_db_config = self.config['vector_db']
         self.retrieval_config = self.config['retrieval']
         self.ollama_config = self.config['ollama']
+        
+        # Force CPU-only mode for Ollama (prevent GPU memory issues)
+        os.environ['OLLAMA_NUM_GPU'] = '0'
+        logger.info("🖥️  Configured for CPU-only mode (OLLAMA_NUM_GPU=0)")
+        
+        # Initialize Ollama embedding function (CPU-based)
+        self.embedding_function = OllamaEmbeddingFunction(
+            url=self.ollama_config['host'] + "/api/embeddings",
+            model_name=self.ollama_config['model_embedding']
+        )
+        logger.info(f"📊 Using Ollama embeddings: {self.ollama_config['model_embedding']}")
         
         # Initialize ChromaDB client
         db_path = Path(self.vector_db_config['path'])
@@ -88,18 +101,27 @@ class RAGRetrievalAgent:
             
             collection_name = self.collection_names[strategy]
             
-            # Delete existing collection if it exists
+            # Delete existing collection if it exists (with version compatibility handling)
             try:
                 self.client.delete_collection(collection_name)
                 logger.info(f"Deleted existing collection: {collection_name}")
-            except:
+            except KeyError as e:
+                # ChromaDB version mismatch - collection format incompatible
+                logger.warning(f"Collection {collection_name} has incompatible format, will recreate")
+            except Exception as e:
+                # Collection doesn't exist, which is fine
                 pass
             
-            # Create new collection
-            collection = self.client.create_collection(
-                name=collection_name,
-                metadata={"hnsw:space": "cosine"}
-            )
+            # Create new collection with Ollama embeddings
+            try:
+                collection = self.client.create_collection(
+                    name=collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                    embedding_function=self.embedding_function
+                )
+            except Exception as e:
+                logger.error(f"Failed to create collection {collection_name}: {str(e)}")
+                raise
             
             # Prepare data for indexing
             ids = []
@@ -178,7 +200,10 @@ class RAGRetrievalAgent:
         if strategy not in self.collections:
             collection_name = self.collection_names[strategy]
             try:
-                self.collections[strategy] = self.client.get_collection(collection_name)
+                self.collections[strategy] = self.client.get_collection(
+                    name=collection_name,
+                    embedding_function=self.embedding_function
+                )
             except:
                 logger.error(f"Collection not found: {collection_name}. Run indexing first.")
                 return {'chunks': [], 'query': query, 'mode': mode, 'top_k': top_k}
@@ -186,16 +211,17 @@ class RAGRetrievalAgent:
         collection = self.collections[strategy]
         
         # Build query filter for well name if provided
+        # Note: Skip filtering in older ChromaDB versions that don't support $contains
+        # Instead, filter results after retrieval
         where_filter = None
-        if well_name:
-            # ChromaDB where filter - check if well name is in the comma-separated list
-            # Note: This is a simple contains check
-            where_filter = {
-                "$or": [
-                    {"well_names": {"$contains": well_name}},
-                    {"doc_id": {"$contains": well_name}}
-                ]
-            }
+        # Commenting out $contains filter as it's not supported in all ChromaDB versions
+        # if well_name:
+        #     where_filter = {
+        #         "$or": [
+        #             {"well_names": {"$contains": well_name}},
+        #             {"doc_id": {"$contains": well_name}}
+        #         ]
+        #     }
         
         # Query collection
         try:
@@ -230,6 +256,15 @@ class RAGRetrievalAgent:
                     chunk['metadata']['well_names'] = [
                         w.strip() for w in chunk['metadata']['well_names'].split(',') if w
                     ]
+                
+                # Post-retrieval filtering by well name (for ChromaDB compatibility)
+                if well_name:
+                    well_names = chunk['metadata'].get('well_names', [])
+                    doc_id = chunk['metadata'].get('doc_id', '')
+                    # Check if well_name appears in well_names list or doc_id
+                    if not (any(well_name.upper() in wn.upper() for wn in well_names) or 
+                            well_name.upper() in doc_id.upper()):
+                        continue  # Skip this chunk
                 
                 chunks.append(chunk)
         
@@ -297,7 +332,10 @@ class RAGRetrievalAgent:
         
         for strategy, collection_name in self.collection_names.items():
             try:
-                collection = self.client.get_collection(collection_name)
+                collection = self.client.get_collection(
+                    name=collection_name,
+                    embedding_function=self.embedding_function
+                )
                 stats[strategy] = {
                     'name': collection_name,
                     'count': collection.count()

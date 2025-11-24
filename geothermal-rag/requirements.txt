@@ -4,10 +4,12 @@ pyyaml>=6.0
 
 # LLM and embeddings
 ollama>=0.1.0
-chromadb>=0.4.0
+chromadb>=0.4.0,<1.0.0  # Tested with 0.4.x and 0.5.x
 
 # PDF processing
 PyMuPDF>=1.23.0
+easyocr>=1.7.0       # OCR for scanned PDFs (no external dependencies)
+Pillow>=10.0.0       # Image processing for OCR
 
 # NLP and text processing
 spacy>=3.7.0

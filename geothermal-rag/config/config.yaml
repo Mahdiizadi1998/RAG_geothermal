@@ -1,11 +1,17 @@
 ollama:
   host: http://localhost:11434
-  model_qa: llama3
-  model_extraction: llama3
+  # CPU-optimized model selection (research-based task matching)
+  # Strategy: smallest model that maintains quality for each task
+  model_qa: phi3:mini               # Good balance speed/quality (2.2GB)
+  model_summary: gemma2:2b          # FASTEST for summaries (1.6GB, 5x faster than 7B)
+  model_verification: tinyllama     # Fast claim matching (637MB)
+  model_extraction: qwen2.5:7b      # Accuracy critical here (4.7GB)
   model_embedding: nomic-embed-text
-  timeout: 300  # Q&A operations (5 minutes)
-  timeout_summary: 600  # Summary operations (10 minutes)
-  timeout_extraction: 300  # Extraction operations (5 minutes)
+  # Timeouts optimized for small models on CPU
+  timeout: 360        # Q&A with phi3:mini (6 min)
+  timeout_summary: 180   # Summary with gemma2:2b (3 min) 
+  timeout_extraction: 600  # Extraction needs time (10 min)
+  timeout_verification: 120  # tinyllama is very fast (2 min)
   
 vector_db:
   type: chromadb
@@ -13,25 +19,26 @@ vector_db:
   distance_metric: cosine
   
 chunking:
-  # Hybrid chunking: Multiple granularities for better retrieval
+  # Optimized chunking strategy based on task requirements
+  # Research shows: summaries need larger chunks, Q&A needs smaller
   factual_qa:
-    chunk_size: 1000
-    chunk_overlap: 250
+    chunk_size: 800      # Precise fact retrieval
+    chunk_overlap: 400   # 50% overlap for context
   technical_extraction:
-    chunk_size: 3500
-    chunk_overlap: 600
+    chunk_size: 5000     # Full tables without splits
+    chunk_overlap: 1200  # High overlap for safety
   summary:
-    chunk_size: 3000
-    chunk_overlap: 500
-  # Additional fine-grained chunks for precise retrieval
+    chunk_size: 4000     # LARGER for narrative flow (research-backed)
+    chunk_overlap: 1000  # 25% overlap maintains continuity
+  # Fine-grained for exact matches
   fine_grained:
-    chunk_size: 500
-    chunk_overlap: 150
-  # Additional coarse-grained chunks for context
+    chunk_size: 400      # Exact phrase matching
+    chunk_overlap: 200   # 50% overlap
+  # Coarse for document-level context
   coarse_grained:
-    chunk_size: 5000
-    chunk_overlap: 800
-  enable_hybrid: true  # Enable multi-granularity chunking
+    chunk_size: 8000     # ~2 pages for full context
+    chunk_overlap: 2000  # Cross-page continuity
+  enable_hybrid: true
     
 extraction:
   enable_llm_fallback: true
@@ -39,9 +46,8 @@ extraction:
   timeout: 300  # 5 minutes for complex extractions
   
 validation:
+  # Physical constraints
   md_tvd_tolerance: 1.0
-  pipe_id_min_mm: 50
-  pipe_id_max_mm: 1000
   inclination_max: 90
   temperature_gradient_min: 20  # °C/km
   temperature_gradient_max: 40  # °C/km
@@ -49,16 +55,41 @@ validation:
   pressure_gradient_max: 12     # kPa/m
   well_depth_min: 500           # meters
   well_depth_max: 5000          # meters
+  # Physical validation ranges (all pipe IDs in inches)
+  min_pipe_id: 2.0      # inches (minimum realistic pipe ID)
+  max_pipe_id: 30.0     # inches (maximum realistic pipe ID)
+  max_md: 5000.0        # meters (maximum measured depth)
+  max_tvd: 5000.0       # meters (maximum true vertical depth)
+  # Fact verification thresholds
+  min_support_rate: 0.8   # 80% of claims must be supported
+  min_confidence: 0.7     # 70% confidence threshold
+  # Confidence scoring
+  high_confidence: 0.85   # High confidence threshold
+  low_confidence: 0.50    # Low confidence threshold
+  # Completeness requirements
+  require_trajectory: true
+  require_casing: true
+  require_tubing: false
+  require_pvt: false
+  # User interaction
+  always_warn_users: true  # Always warn about validation issues
+  always_ask_confirmation: true  # Always ask for confirmation before analysis
   
 retrieval:
-  hybrid_weight_dense: 0.7
-  hybrid_weight_sparse: 0.3
-  top_k_qa: 20  # Increased for better context
-  top_k_extraction: 30  # More chunks for comprehensive extraction
-  top_k_summary: 35  # More content for detailed summaries
-  top_k_fine: 15  # For fine-grained retrieval
-  top_k_coarse: 10  # For coarse-grained retrieval
+  hybrid_weight_dense: 0.8   # Semantic search for technical content
+  hybrid_weight_sparse: 0.2  # Keyword matching weight
+  # Optimized counts: quality > quantity (research shows 10-20 optimal)
+  top_k_qa: 20           # Reduced: focused context better than noise
+  top_k_extraction: 50   # Keep high for comprehensive data extraction
+  top_k_summary: 12      # REDUCED: 12 large chunks = same content as 60 small
+  top_k_fine: 15         # Reduced for precision
+  top_k_coarse: 8        # Few high-level chunks for context
   
+summarization:
+  default_words: 200  # Default word count if not specified
+  tolerance_percent: 5  # ±5% tolerance for word count
+  max_retries: 2  # Retry generation if word count is off
+
 ui:
   port: 7860
   share: false

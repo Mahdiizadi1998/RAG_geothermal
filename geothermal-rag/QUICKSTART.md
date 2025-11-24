@@ -13,7 +13,20 @@
 
 Visit [https://ollama.ai/](https://ollama.ai/) and install for your OS.
 
-Start Ollama:
+**IMPORTANT**: If you have a GPU with **less than 4GB VRAM** (e.g., RTX 3050), follow **CPU_ONLY_SETUP.md** for complete instructions.
+
+**Quick CPU-Only Start:**
+```bash
+# Windows Command Prompt
+set OLLAMA_NUM_GPU=0
+ollama serve
+
+# Linux/macOS / Dev Containers
+export OLLAMA_NUM_GPU=0
+ollama serve
+```
+
+**GPU Mode** (requires 6GB+ VRAM for stable operation):
 ```bash
 ollama serve
 ```
@@ -113,6 +126,36 @@ Recommended test wells:
 
 ## Common Issues
 
+### "KeyError: '_type'" or "Incompatible collection format"
+
+**Cause**: ChromaDB version mismatch (old database format)
+
+**Solution**: Delete the database and re-upload PDFs:
+```bash
+# Windows
+rmdir /s chroma_db
+
+# Linux/Mac
+rm -rf chroma_db
+
+# Then restart app and re-upload PDFs
+python app.py
+```
+
+### "TypeError: BlockContext.__init__() got an unexpected keyword argument 'theme'"
+
+**Cause**: Older Gradio version (< 4.0)
+
+**Solution**: App now auto-detects and uses fallback. Just restart:
+```bash
+python app.py
+```
+
+Or upgrade Gradio:
+```bash
+pip install --upgrade gradio>=4.0.0
+```
+
 ### "Ollama connection refused"
 **Solution**: Start Ollama server
 ```bash
@@ -138,6 +181,41 @@ ollama serve
 - Use llama3 instead of llama3.1 (faster, slightly less accurate)
 - Reduce top_k in config.yaml
 - Close other applications to free RAM
+
+### GPU Out of Memory / CUDA errors
+**Error**: `cudaMalloc failed: out of memory` or `ONNXRuntimeError: bad allocation`
+
+**Causes**:
+- GPU has insufficient VRAM (<4GB)
+- Other applications using GPU memory
+
+**Solutions**:
+1. **Restart Ollama in CPU-only mode**:
+   ```bash
+   # Stop Ollama, then:
+   # Windows
+   set OLLAMA_NUM_GPU=0
+   ollama serve
+   
+   # Linux/macOS
+   export OLLAMA_NUM_GPU=0
+   ollama serve
+   ```
+
+2. **Use smaller models** (edit `config/config.yaml`):
+   ```yaml
+   ollama:
+     model_qa: phi3:mini        # 3.8GB instead of llama3's 4.3GB
+     model_summary: phi3:mini
+     # or even smaller:
+     model_qa: tinyllama        # Only 637MB
+   ```
+
+3. **Delete vector database and restart app** (system now uses CPU-based embeddings):
+   ```bash
+   rm -rf chroma_db
+   python app.py
+   ```
 
 ## Configuration
 
