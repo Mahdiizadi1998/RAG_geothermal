@@ -249,9 +249,35 @@ class GeothermalRAGSystem:
         if self.llm_available:
             try:
                 logger.info("⏳ Generating answer with LLM...")
-                # Use combined context from hybrid retrieval
-                combined_chunk = [{'text': combined_text}]
-                answer = self.llm.generate_answer(query, combined_chunk)
+                
+                # Format context chunks properly for LLM
+                formatted_chunks = []
+                
+                # Add database results
+                for db_result in database_results:
+                    formatted_chunks.append({
+                        'text': db_result.get('text', ''),
+                        'metadata': {
+                            'source_file': 'Database',
+                            'page_numbers': [db_result.get('page', '?')]
+                        }
+                    })
+                
+                # Add semantic results (they already have proper format)
+                for chunk in semantic_results:
+                    # Ensure metadata exists
+                    if 'metadata' not in chunk:
+                        chunk['metadata'] = {'source_file': 'Document', 'page_numbers': ['?']}
+                    formatted_chunks.append(chunk)
+                
+                # If no formatted chunks, create one from combined text
+                if not formatted_chunks:
+                    formatted_chunks = [{
+                        'text': combined_text,
+                        'metadata': {'source_file': 'Document', 'page_numbers': ['?']}
+                    }]
+                
+                answer = self.llm.generate_answer(query, formatted_chunks)
                 
                 debug_info = f"Retrieved {len(database_results)} tables, {len(semantic_results)} chunks\n"
                 debug_info += f"Generated answer using LLM ({self.llm.model_qa})\n"
@@ -260,6 +286,8 @@ class GeothermalRAGSystem:
                 
             except Exception as e:
                 logger.error(f"LLM answer generation failed: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 return f"Error generating answer: {str(e)}", str(e)
         
         # Fallback: return raw context

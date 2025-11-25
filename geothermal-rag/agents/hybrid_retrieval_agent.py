@@ -66,14 +66,24 @@ class HybridRetrievalAgent:
         return results
     
     def _query_database(self, query: str, well_name: Optional[str]) -> List[Dict]:
-        """Get ALL complete tables from database for the well"""
+        """
+        Query database - converts natural language to appropriate data retrieval
+        
+        The database stores:
+        - Complete tables with ALL data (text, numbers, measurements)
+        - Well information (metadata, dates, locations)
+        - Each table has headers_json and rows_json fields
+        
+        We retrieve complete tables and let the LLM extract the specific answer
+        """
         results = []
         
         if not well_name:
             logger.warning("No well name provided for database query")
             return results
         
-        # Get ALL complete tables
+        # Get ALL complete tables for the well
+        # The LLM will search through these to find the specific answer
         tables = self.db.get_complete_tables(well_name)
         
         if not tables:
