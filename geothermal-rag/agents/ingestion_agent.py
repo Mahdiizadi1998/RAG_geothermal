@@ -231,6 +231,7 @@ class IngestionAgent:
                             'table_num': table_idx,
                             'headers': headers,
                             'rows': rows,
+                            'page_text': page_text,  # Store full page text for well detection
                             'metadata': {
                                 'table_ref': table_ref,
                                 'num_rows': len(rows),
@@ -263,15 +264,20 @@ class IngestionAgent:
     
     def process_and_store_complete_tables(self, pdf_path: str, well_names: List[str]) -> int:
         """
-        Extract complete tables from PDF and store in database with LLM classification
-        Stores entire table structure, not individual rows
+        Extract complete tables from PDF and store in database with intelligent well name detection
+        
+        Multi-well detection strategy (priority order):
+        1. Check table header/caption (above/below table) for well names
+        2. Check table content (headers + rows) for well names
+        3. If no wells found, assign ALL document well names (table may be relevant to all)
+        4. Tables with multiple wells are stored once per well
         
         Args:
             pdf_path: Path to PDF file
-            well_names: List of well names found in document
+            well_names: List of ALL well names found in document
             
         Returns:
-            Number of tables successfully stored
+            Number of table-well associations stored
         """
         if not self.db:
             logger.warning("Database not initialized - skipping table storage")
@@ -281,8 +287,9 @@ class IngestionAgent:
             logger.warning("pdfplumber not available - cannot extract tables")
             return 0
         
-        # Default to first well name if multiple found
-        primary_well = well_names[0] if well_names else "UNKNOWN"
+        if not well_names:
+            logger.warning("No well names detected - cannot store tables")
+            return 0
         
         tables = self.extract_tables(pdf_path)
         stored_count = 0
@@ -300,7 +307,13 @@ class IngestionAgent:
         
         for table in tables:
             try:
-                # Classify table type using LLM if available
+                # STEP 1: Detect which well(s) this table belongs to
+                table_wells = self._detect_table_wells(
+                    table=table,
+                    document_wells=well_names
+                )
+                
+                # STEP 2: Classify table type using LLM if available
                 if llm_available and llm:
                     try:
                         table_type = llm.classify_table(
@@ -314,23 +327,124 @@ class IngestionAgent:
                 else:
                     table_type = 'auto_detected'
                 
-                # Store complete table with all data
-                table_id = self.db.store_complete_table(
-                    well_name=primary_well,
-                    source_document=Path(pdf_path).name,
-                    page=table['page'],
-                    table_type=table_type,
-                    table_reference=table['metadata'].get('table_ref', f"Table on page {table['page']}"),
-                    headers=table['headers'],
-                    rows=table['rows']
-                )
-                stored_count += 1
-                logger.debug(f"  Stored table {table_id} (type: {table_type}) from page {table['page']}")
+                # STEP 3: Store table for EACH detected well
+                for well_name in table_wells:
+                    table_id = self.db.store_complete_table(
+                        well_name=well_name,
+                        source_document=Path(pdf_path).name,
+                        page=table['page'],
+                        table_type=table_type,
+                        table_reference=table['metadata'].get('table_ref', f"Table on page {table['page']}"),
+                        headers=table['headers'],
+                        rows=table['rows']
+                    )
+                    stored_count += 1
+                    logger.debug(f"  Stored table {table_id} (type: {table_type}, well: {well_name}) from page {table['page']}")
                 
             except Exception as e:
                 logger.error(f"Failed to store table on page {table['page']}: {str(e)}")
                 continue
         
-        logger.info(f"Stored {stored_count} complete tables for {primary_well}")
+        logger.info(f"Stored {stored_count} table-well associations across {len(well_names)} wells")
         return stored_count
+    
+    def _detect_table_wells(self, table: Dict, document_wells: List[str]) -> List[str]:
+        """
+        Detect which well(s) a table belongs to using 4-step priority system
+        
+        Priority:
+        1. Table caption/header (text above/below table with well name)
+        2. Table content (headers + cell values)
+        3. Fallback: ALL document wells (table may be relevant to all)
+        
+        Args:
+            table: Table dict with 'headers', 'rows', 'page_text', 'metadata'
+            document_wells: List of all well names in document
+            
+        Returns:
+            List of well names this table belongs to (1+ wells)
+        """
+        page_text = table.get('page_text', '')
+        table_ref = table['metadata'].get('table_ref', '')
+        
+        # STEP 1: Check table caption/header (text around table reference)
+        caption_wells = self._find_wells_in_caption(page_text, table_ref, document_wells)
+        if caption_wells:
+            logger.debug(f"  Found {len(caption_wells)} well(s) in table caption: {caption_wells}")
+            return caption_wells
+        
+        # STEP 2: Check table content (headers + rows)
+        content_wells = self._find_wells_in_table_content(
+            table['headers'],
+            table['rows'],
+            document_wells
+        )
+        if content_wells:
+            logger.debug(f"  Found {len(content_wells)} well(s) in table content: {content_wells}")
+            return content_wells
+        
+        # STEP 3: No wells found - assign to ALL document wells
+        logger.debug(f"  No specific wells detected - assigning to all {len(document_wells)} wells")
+        return document_wells
+    
+    def _find_wells_in_caption(self, page_text: str, table_ref: str, document_wells: List[str]) -> List[str]:
+        """
+        Find well names in table caption (header above or below table)
+        
+        Searches for well names near the table reference (e.g., "Table 4-1: ABC-GT-01 Casing")
+        
+        Args:
+            page_text: Full text of the page
+            table_ref: Table reference string (e.g., "Table 4-1")
+            document_wells: List of well names to search for
+            
+        Returns:
+            List of well names found in caption (empty if none)
+        """
+        if not table_ref or not page_text:
+            return []
+        
+        # Find table reference position in page text
+        ref_pos = page_text.lower().find(table_ref.lower())
+        if ref_pos == -1:
+            return []
+        
+        # Extract text around table reference (±200 chars = likely caption)
+        start = max(0, ref_pos - 100)
+        end = min(len(page_text), ref_pos + len(table_ref) + 200)
+        caption_text = page_text[start:end]
+        
+        # Find all well names in caption
+        found_wells = []
+        for well in document_wells:
+            if well in caption_text:
+                found_wells.append(well)
+        
+        return found_wells
+    
+    def _find_wells_in_table_content(self, headers: List[str], rows: List[List[str]], 
+                                      document_wells: List[str]) -> List[str]:
+        """
+        Find well names in table content (headers + cell values)
+        
+        Args:
+            headers: List of column headers
+            rows: List of row data
+            document_wells: List of well names to search for
+            
+        Returns:
+            List of well names found in table content
+        """
+        # Combine all table text
+        table_text = ' '.join(headers) + ' '
+        for row in rows:
+            table_text += ' '.join(str(cell) for cell in row) + ' '
+        
+        # Find all well names in table text
+        found_wells = []
+        for well in document_wells:
+            if well in table_text:
+                found_wells.append(well)
+        
+        return found_wells
 
