@@ -193,6 +193,22 @@ class WellDatabaseManager:
         )
         """)
         
+        # Incidents table (Gas peaks, stuck pipe, mud losses)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS incidents (
+            incident_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            well_id INTEGER NOT NULL,
+            date TEXT,
+            incident_type TEXT,
+            description TEXT,
+            depth_md REAL,
+            depth_unit TEXT DEFAULT 'm',
+            severity TEXT,
+            source_page INTEGER,
+            FOREIGN KEY (well_id) REFERENCES wells(well_id)
+        )
+        """)
+        
         # Documents table - track source files
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS documents (
@@ -458,6 +474,30 @@ class WellDatabaseManager:
         self.conn.commit()
         return cursor.lastrowid
     
+    def add_incident(self, well_name: str, incident_data: Dict) -> int:
+        """Add incident to database"""
+        well_id = self.add_or_get_well(well_name)
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+        INSERT INTO incidents (
+            well_id, date, incident_type, description, depth_md, depth_unit,
+            severity, source_page
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            well_id,
+            incident_data.get('date'),
+            incident_data.get('incident_type'),
+            incident_data.get('description'),
+            incident_data.get('depth_md'),
+            incident_data.get('depth_unit', 'm'),
+            incident_data.get('severity'),
+            incident_data.get('source_page')
+        ))
+        
+        self.conn.commit()
+        return cursor.lastrowid
+    
     def get_well_summary(self, well_name: str) -> Dict:
         """Get comprehensive well summary from database"""
         cursor = self.conn.cursor()
@@ -503,12 +543,21 @@ class WellDatabaseManager:
         """, (well_id,))
         fluids = [dict(row) for row in cursor.fetchall()]
         
+        # Get incidents
+        cursor.execute("""
+        SELECT * FROM incidents 
+        WHERE well_id = ? 
+        ORDER BY date, depth_md
+        """, (well_id,))
+        incidents = [dict(row) for row in cursor.fetchall()]
+        
         return {
             'well_info': dict(well),
             'casing_strings': casings,
             'formations': formations,
             'cementing': cementing,
-            'drilling_fluids': fluids
+            'drilling_fluids': fluids,
+            'incidents': incidents
         }
     
     def query_sql(self, query: str, params: tuple = ()) -> List[Dict]:
@@ -539,6 +588,8 @@ class WellDatabaseManager:
         cursor.execute("DELETE FROM cementing WHERE well_id = ?", (well_id,))
         cursor.execute("DELETE FROM casing_strings WHERE well_id = ?", (well_id,))
         cursor.execute("DELETE FROM formations WHERE well_id = ?", (well_id,))
+        cursor.execute("DELETE FROM incidents WHERE well_id = ?", (well_id,))
+        cursor.execute("DELETE FROM drilling_fluids WHERE well_id = ?", (well_id,))
         cursor.execute("DELETE FROM operations WHERE well_id = ?", (well_id,))
         cursor.execute("DELETE FROM measurements WHERE well_id = ?", (well_id,))
         cursor.execute("DELETE FROM documents WHERE well_id = ?", (well_id,))

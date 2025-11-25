@@ -45,6 +45,10 @@ class EnhancedTableParser:
                 'mud', 'fluid', 'hole size', 'density', 'viscosity', 'ph',
                 'mud weight', 'circulation', 'loss', 'drilling fluid'
             ],
+            'incidents': [
+                'incident', 'problem', 'stuck', 'loss', 'kick', 'gas peak',
+                'failure', 'fishing', 'npt', 'non productive time'
+            ],
             'formations': [
                 'formation', 'lithology', 'top', 'base', 'depth', 'age',
                 'stratigraphy', 'geology', 'layer', 'zone'
@@ -404,6 +408,45 @@ class EnhancedTableParser:
                 })
         
         return formations
+    
+    def parse_incidents_table(self, headers: List[str], rows: List[List[str]], 
+                             page: int = None) -> List[Dict]:
+        """
+        Parse incidents table (NPT, Problems, etc.)
+        Extracts: Date, Type, Description, Depth, Severity
+        """
+        incidents = []
+        
+        headers_lower = [h.lower().strip() for h in headers]
+        
+        date_col = self._find_column(headers_lower, ['date', 'time', 'day'])
+        type_col = self._find_column(headers_lower, ['type', 'incident', 'category', 'code'])
+        desc_col = self._find_column(headers_lower, ['description', 'details', 'remarks', 'comment'])
+        depth_col = self._find_column(headers_lower, ['depth', 'md'])
+        severity_col = self._find_column(headers_lower, ['severity', 'class', 'npt hours', 'lost time'])
+        
+        for row in rows:
+            if not row or not any(row):
+                continue
+            
+            date = self._extract_date(self._get_cell(row, date_col))
+            incident_type = self._get_cell(row, type_col)
+            description = self._get_cell(row, desc_col)
+            depth = self._extract_depth(self._get_cell(row, depth_col))
+            severity = self._get_cell(row, severity_col)
+            
+            if description or incident_type:
+                incidents.append({
+                    'date': date,
+                    'incident_type': incident_type,
+                    'description': description,
+                    'depth_md': depth,
+                    'depth_unit': 'm',
+                    'severity': severity,
+                    'source_page': page
+                })
+        
+        return incidents
     
     # ========== Helper Methods ==========
     

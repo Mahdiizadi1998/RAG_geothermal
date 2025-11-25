@@ -9,13 +9,6 @@ import re
 from typing import Dict, List, Optional
 from pathlib import Path
 import logging
-from PIL import Image
-import io
-
-# Suppress pdfminer warnings about invalid color values
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='pdfminer')
-logging.getLogger('pdfminer.pdfinterp').setLevel(logging.ERROR)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,24 +21,6 @@ try:
 except ImportError:
     PDFPLUMBER_AVAILABLE = False
     logger.warning("pdfplumber not available - install: pip install pdfplumber")
-
-# Try to import OCR libraries (fallback chain: EasyOCR -> pytesseract)
-OCR_AVAILABLE = False
-OCR_ENGINE = None
-
-try:
-    import easyocr
-    OCR_AVAILABLE = True
-    OCR_ENGINE = 'easyocr'
-    logger.info("Using EasyOCR (GPU/CPU, no external dependencies)")
-except ImportError:
-    try:
-        import pytesseract
-        OCR_AVAILABLE = True
-        OCR_ENGINE = 'tesseract'
-        logger.info("Using Tesseract OCR")
-    except ImportError:
-        logger.warning("No OCR available - scanned PDFs will not be processed. Install: pip install easyocr")
 
 
 class IngestionAgent:
@@ -66,30 +41,6 @@ class IngestionAgent:
         # Database and table parser (optional - can be set later)
         self.db = database_manager
         self.table_parser = table_parser
-        
-        # Initialize EasyOCR reader if available (lazy loading with memory optimization)
-        self.ocr_reader = None
-        if OCR_ENGINE == 'easyocr':
-            try:
-                # Force CPU-only mode for PyTorch
-                import os
-                os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable CUDA
-                
-                # Disable memory pinning warnings
-                import warnings
-                warnings.filterwarnings('ignore', message='.*pin_memory.*')
-                
-                # Use quantized model for lower memory usage
-                self.ocr_reader = easyocr.Reader(
-                    ['en'], 
-                    gpu=False,  # CPU only
-                    verbose=False,
-                    quantize=True,  # Use quantized model (less memory)
-                    download_enabled=True
-                )
-                logger.info("EasyOCR reader initialized (CPU-only, quantized, memory-optimized)")
-            except Exception as e:
-                logger.warning(f"Failed to initialize EasyOCR: {str(e)}")
     
     def process(self, pdf_paths: List[str]) -> List[Dict]:
         """
@@ -144,25 +95,13 @@ class IngestionAgent:
             'mod_date': doc.metadata.get('modDate', '')
         }
         
-        # Extract text page by page with OCR fallback and enhanced metadata
+        # Extract text page by page
         page_contents = []
         all_text = []
-        ocr_used = False
         
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
-            
-            # If no text extracted and OCR is available, try OCR
-            if len(text.strip()) < 50 and OCR_AVAILABLE:
-                try:
-                    ocr_text = self._ocr_page(page)
-                    if len(ocr_text.strip()) > len(text.strip()):
-                        text = ocr_text
-                        ocr_used = True
-                        logger.debug(f"  OCR used for page {page_num + 1}")
-                except Exception as e:
-                    logger.warning(f"  OCR failed for page {page_num + 1}: {str(e)}")
             
             # Extract metadata from page
             page_metadata = self._extract_page_metadata(text, page_num + 1)
@@ -177,9 +116,6 @@ class IngestionAgent:
             
             all_text.append(text)
         
-        if ocr_used:
-            logger.info(f"  ✓ OCR applied to extract text from images")
-        
         doc.close()
         
         # Combine all text
@@ -188,9 +124,6 @@ class IngestionAgent:
         # Check if we got any meaningful text
         if len(full_text.strip()) < 100:
             logger.warning(f"  ⚠️ Very little text extracted ({len(full_text)} chars)")
-            if not OCR_AVAILABLE:
-                logger.warning(f"  💡 Install pytesseract for OCR support: pip install pytesseract")
-                logger.warning(f"  💡 Also install Tesseract: https://github.com/tesseract-ocr/tesseract")
         
         # Extract well names
         well_names = self._extract_well_names(full_text)
@@ -468,6 +401,28 @@ class IngestionAgent:
                     stored_count += len(formation_data)
                     logger.info(f"  Stored {len(formation_data)} formations for {primary_well}")
                 
+                elif table_type == 'incidents':
+                    incident_data = self.table_parser.parse_incidents_table(
+                        table['headers'],
+                        table['rows'],
+                        table['page']
+                    )
+                    for incident in incident_data:
+                        self.db.add_incident(primary_well, incident)
+                    stored_count += len(incident_data)
+                    logger.info(f"  Stored {len(incident_data)} incidents for {primary_well}")
+                
+            except Exception as e:
+                    incident_data = self.table_parser.parse_incidents_table(
+                        table['headers'],
+                        table['rows'],
+                        table['page']
+                    )
+                    for incident in incident_data:
+                        self.db.add_incident(primary_well, incident)
+                    stored_count += len(incident_data)
+                    logger.info(f"  Stored {len(incident_data)} incidents for {primary_well}")
+                
             except Exception as e:
                 logger.error(f"Failed to process table on page {table['page']}: {str(e)}")
                 logger.exception(e)  # Full stack trace for debugging
@@ -516,61 +471,3 @@ class IngestionAgent:
                 matching_pages.append(page['page_number'])
         
         return matching_pages
-    
-    def _ocr_page(self, page) -> str:
-        """
-        Perform OCR on a PDF page that has images/scanned content
-        Memory-optimized: uses lower resolution to avoid OOM errors
-        
-        Args:
-            page: PyMuPDF page object
-            
-        Returns:
-            Extracted text from OCR
-        """
-        # Render page at LOWER resolution to reduce memory (150 DPI instead of 300)
-        # This reduces memory usage by 4x while maintaining readability
-        pix = page.get_pixmap(matrix=fitz.Matrix(150/72, 150/72))
-        
-        # Convert to PIL Image
-        img_data = pix.tobytes("png")
-        img = Image.open(io.BytesIO(img_data))
-        
-        # Resize to max width of 1024px if larger (further memory reduction)
-        max_width = 1024
-        if img.width > max_width:
-            ratio = max_width / img.width
-            new_size = (max_width, int(img.height * ratio))
-            img = img.resize(new_size, Image.Resampling.LANCZOS)
-        
-        # Perform OCR based on available engine
-        if OCR_ENGINE == 'easyocr' and self.ocr_reader:
-            # EasyOCR: convert PIL to numpy array
-            import numpy as np
-            img_array = np.array(img)
-            
-            # Process with lower batch size and width_ths to reduce memory
-            try:
-                results = self.ocr_reader.readtext(
-                    img_array, 
-                    detail=0,  # Only return text, no boxes
-                    paragraph=True,  # Group into paragraphs
-                    width_ths=0.7,  # Threshold for grouping
-                    batch_size=1  # Process one at a time to reduce memory
-                )
-                text = '\n'.join(results)
-            except Exception as e:
-                logger.warning(f"  OCR processing failed, trying fallback: {str(e)}")
-                # Fallback: even smaller image
-                img_small = img.resize((img.width // 2, img.height // 2), Image.Resampling.LANCZOS)
-                img_array_small = np.array(img_small)
-                results = self.ocr_reader.readtext(img_array_small, detail=0, batch_size=1)
-                text = '\n'.join(results)
-        elif OCR_ENGINE == 'tesseract':
-            # Tesseract
-            import pytesseract
-            text = pytesseract.image_to_string(img, lang='eng')
-        else:
-            text = ""
-        
-        return text

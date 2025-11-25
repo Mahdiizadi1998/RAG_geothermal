@@ -91,7 +91,7 @@ class GeothermalRAGSystem:
         self.memory = ChatMemory()
         self.judge = EnsembleJudgeAgent()
         self.llm = OllamaHelper(config_path)
-        self.well_summary_agent = WellSummaryAgent(llm_helper=self.llm)
+        self.well_summary_agent = WellSummaryAgent(llm_helper=self.llm, database_manager=self.db)
         self.nodal_runner = NodalAnalysisRunner()
         
         # Initialize new validation agents
@@ -285,13 +285,35 @@ class GeothermalRAGSystem:
         if context:
             enhanced_query = f"{context}\n\nCurrent question: {query}"
         
-        # Retrieve relevant chunks using hybrid granularity (multiple chunk sizes)
-        retrieval_result = self.rag.retrieve_hybrid_granularity(enhanced_query, mode='qa')
-        chunks = retrieval_result['chunks']
-        logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
+        # Extract well name from query or context
+        well_name = self._extract_well_name_from_query(enhanced_query)
         
-        if not chunks:
+        # Mode A: Hybrid Retrieval (SQL for structured data + Vector for narrative)
+        logger.info("⏳ Using hybrid retrieval (Database + Vector Search)...")
+        hybrid_result = self.hybrid_retrieval.retrieve(
+            enhanced_query,
+            well_name=well_name,
+            mode='auto',  # Auto-detect: database/semantic/hybrid
+            top_k=10
+        )
+        
+        # Get combined context
+        combined_text = hybrid_result.get('combined_text', '')
+        semantic_results = hybrid_result.get('semantic_results', [])
+        database_results = hybrid_result.get('database_results', [])
+        retrieval_mode = hybrid_result.get('mode', 'hybrid')
+        
+        logger.info(f"Hybrid retrieval mode: {retrieval_mode}, DB results: {len(database_results)}, Semantic chunks: {len(semantic_results)}")
+        
+        if not combined_text and not semantic_results:
+            # Check if query is out of scope (not in the 8 data types)
+            if retrieval_mode == 'database' and not database_results:
+                return "⚠️ No data found. The question may be outside the scope of the 8 supported data types:\n" \
+                       "1. General Data\n2. Timeline\n3. Depths\n4. Casing\n5. Cementing\n6. Fluids\n7. Geology\n8. Incidents", ""
             return "⚠️ No relevant information found in documents", ""
+        
+        # Use semantic chunks for confidence scoring
+        chunks = semantic_results if semantic_results else []
         
         # Calculate source quality
         source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=5)
@@ -300,7 +322,21 @@ class GeothermalRAGSystem:
         if self.llm_available:
             try:
                 logger.info("⏳ Generating answer with LLM...")
-                answer = self.llm.generate_answer(query, chunks)
+                # Use combined context from hybrid retrieval (database + semantic)
+                if combined_text:
+                    # Create a single "chunk" with combined context for LLM
+                    combined_chunk = [{
+                        'text': combined_text,
+                        'metadata': {
+                            'source': 'hybrid_retrieval',
+                            'mode': retrieval_mode,
+                            'db_results': len(database_results),
+                            'semantic_results': len(semantic_results)
+                        }
+                    }]
+                    answer = self.llm.generate_answer(query, combined_chunk)
+                else:
+                    answer = self.llm.generate_answer(query, chunks)
                 
                 # Fact verification
                 logger.info("⏳ Verifying facts...")
@@ -388,77 +424,93 @@ class GeothermalRAGSystem:
         return response_text, debug_info
     
     def _handle_summary(self, query: str) -> Tuple[str, str]:
-        """Handle document summarization using 3-pass extraction system"""
+        """
+        Handle document summarization (Mode B)
+        Uses all 8 data types from database and vector store
+        """
         # Analyze query to check if user wants detailed End of Well Summary
         query_analysis = self.query_analyzer.analyze(query)
         query_lower = query.lower()
         
-        # Check if user wants detailed/professional End of Well Summary
-        detailed_summary = any(kw in query_lower for kw in [
-            'end of well', 'eow', 'detailed', 'professional', 'comprehensive',
-            'completion report', 'well report', 'drilling report'
-        ])
+        # Extract well name from query
+        well_name = self._extract_well_name_from_query(query)
         
-        # If detailed summary requested and we have indexed documents, use 3-pass system
-        if detailed_summary and self.indexed_documents:
-            logger.info("📝 Generating detailed End of Well Summary using 3-pass system...")
+        if not well_name:
+            return "⚠️ Please specify a well name for summary generation", ""
+        
+        logger.info(f"📝 Generating Mode B summary for well: {well_name}")
+        
+        try:
+            # Get narrative context from vector store (for geology/narrative details)
+            logger.info("⏳ Fetching narrative context from vector store...")
+            narrative_query = f"geology formations incidents problems {well_name}"
+            retrieval_result = self.rag.retrieve(narrative_query, top_k=5)
             
-            try:
-                # Get the most recent PDF file path
-                pdf_path = None
-                document_data = None
+            narrative_context = ""
+            if isinstance(retrieval_result, dict):
+                semantic_results = retrieval_result.get('chunks', [])
+            else:
+                semantic_results = retrieval_result
+            
+            if semantic_results:
+                narrative_texts = [chunk.get('text', '') if isinstance(chunk, dict) else str(chunk) 
+                                 for chunk in semantic_results[:3]]
+                narrative_context = "\n\n".join(narrative_texts)
+            
+            # Generate summary using all 8 data types from database
+            logger.info("⏳ Generating comprehensive summary using database + narrative...")
+            summary_result = self.well_summary_agent.generate_summary(
+                well_name=well_name,
+                narrative_context=narrative_context
+            )
+            
+            # Build response
+            response_parts = []
+            
+            # Add confidence header
+            confidence = summary_result['confidence']
+            if confidence >= 0.8:
+                response_parts.append("✅ **HIGH CONFIDENCE END OF WELL SUMMARY**\n")
+            elif confidence >= 0.6:
+                response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
+            else:
+                response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY DATA**\n")
+            
+            # Add the summary report
+            response_parts.append(summary_result['summary_report'])
+            
+            # Add data sources info
+            well_data = summary_result.get('well_data', {})
+            data_types_present = []
+            if well_data.get('well_info'): data_types_present.append("General Data")
+            if well_data.get('casing_strings'): data_types_present.append("Casing")
+            if well_data.get('cementing'): data_types_present.append("Cementing")
+            if well_data.get('drilling_fluids'): data_types_present.append("Fluids")
+            if well_data.get('formations'): data_types_present.append("Geology")
+            if well_data.get('incidents'): data_types_present.append("Incidents")
+            
+            response_parts.append(f"\n\n**Data Sources:** {', '.join(data_types_present)}")
+            response_parts.append(f"**Confidence Score:** {confidence*100:.0f}%")
+            response_parts.append("\n*Generated using Mode B: All 8 data types from database + narrative context*")
+            
+            summary_text = "\n".join(response_parts)
+            
+            # Debug info
+            debug_info = f"Mode B Summary System\n"
+            debug_info += f"Well: {well_name}\n"
+            debug_info += f"Data types used: {len(data_types_present)}/8\n"
+            debug_info += f"Casing strings: {len(well_data.get('casing_strings', []))}\n"
+            debug_info += f"Formations: {len(well_data.get('formations', []))}\n"
+            debug_info += f"Incidents: {len(well_data.get('incidents', []))}\n"
+            debug_info += f"Narrative chunks: {len(semantic_results)}\n"
+            debug_info += f"Confidence: {confidence*100:.0f}%\n"
+            
+            return summary_text, debug_info
                 
-                if self.indexed_documents:
-                    # Use first indexed document (can be enhanced to select specific well)
-                    doc_info = self.indexed_documents[0]
-                    pdf_path = doc_info.get('filepath')
-                    document_data = doc_info
-                
-                if not pdf_path:
-                    logger.warning("No PDF path available for 3-pass summary")
-                    # Fall through to standard summary
-                else:
-                    # Generate 3-pass summary
-                    summary_result = self.well_summary_agent.generate_summary(
-                        pdf_path=pdf_path,
-                        document_data=document_data
-                    )
-                    
-                    # Build response
-                    response_parts = []
-                    
-                    # Add confidence header
-                    confidence = summary_result['confidence']
-                    if confidence >= 0.8:
-                        response_parts.append("✅ **HIGH CONFIDENCE END OF WELL SUMMARY**\n")
-                    elif confidence >= 0.6:
-                        response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
-                    else:
-                        response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY DATA**\n")
-                    
-                    # Add the summary report
-                    response_parts.append(summary_result['summary_report'])
-                    
-                    # Add confidence details
-                    response_parts.append(f"\n\n**Confidence Score:** {confidence*100:.0f}%")
-                    response_parts.append("\n*Generated using 3-pass extraction: Metadata → Technical Specs → Narrative*")
-                    
-                    summary_text = "\n".join(response_parts)
-                    
-                    # Debug info
-                    debug_info = f"3-Pass Summary System Used\n"
-                    debug_info += f"Pass 1 - Metadata: {len(summary_result['metadata'])} fields\n"
-                    debug_info += f"Pass 2 - Casing Program: {len(summary_result['technical_specs'].get('casing_program', []))} strings\n"
-                    debug_info += f"Pass 3 - Narrative: {len(summary_result['narrative'])} sections\n"
-                    debug_info += f"Confidence: {confidence*100:.0f}%\n"
-                    debug_info += f"PDF: {pdf_path}\n"
-                    
-                    return summary_text, debug_info
-                    
-            except Exception as e:
-                logger.error(f"3-pass summary generation failed: {str(e)}")
-                logger.exception(e)
-                # Fall through to standard summary
+        except Exception as e:
+            logger.error(f"Mode B summary generation failed: {str(e)}")
+            logger.exception(e)
+            return f"❌ Summary generation failed: {str(e)}", str(e)
         
         # Standard summary approach (original code)
         logger.info("📝 Generating standard summary...")

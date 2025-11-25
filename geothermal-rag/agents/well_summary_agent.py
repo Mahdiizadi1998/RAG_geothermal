@@ -31,104 +31,92 @@ except ImportError:
 
 class WellSummaryAgent:
     """
-    Generates comprehensive End of Well summaries using a three-pass approach
+    Generates comprehensive End of Well summaries using hybrid data sources
     
-    Pass 1: Metadata Extraction (Key-Value)
-    - Scan first 3 pages
-    - Use regex for dates (Spud Date, End Date)
-    - Use LLM for Operator, Well Name, Rig Name
-    - Compute Days_Total
+    Mode B: Summary Generation
+    - Uses all 8 data types from database (structured) and vector store (narrative)
+    - No word limit but concise
+    - If data not found in PDF, don't mention it
     
-    Pass 2: Technical Specs Extraction (Table-to-Markdown)
-    - Search for Casing/Tubing/Liner tables
-    - Extract tables with pdfplumber
-    - Convert to Markdown
-    - Use LLM with JSON schema to extract pipe_id (ID column)
-    
-    Pass 3: Narrative Extraction (Section-Restricted)
-    - Locate Geology/Lithology sections
-    - Extract formation instabilities, gas peaks, drilling hazards
+    Data Sources:
+    1. Database: General Data, Timeline, Depths, Casing, Cementing, Fluids, Geology (formations), Incidents
+    2. Vector Store: Narrative context, descriptions, additional details
     """
     
-    def __init__(self, llm_helper=None):
+    def __init__(self, llm_helper=None, database_manager=None):
         """
         Initialize Well Summary Agent
         
         Args:
             llm_helper: OllamaHelper instance for LLM calls (optional)
+            database_manager: WellDatabaseManager for structured data access
         """
         self.llm = llm_helper
+        self.db = database_manager
         self.llm_available = llm_helper is not None and llm_helper.is_available()
         
-        # Regex patterns for Pass 1 (Metadata)
-        self.date_patterns = {
-            'spud_date': [
-                r'Spud\s+Date[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-                r'Start\s+Date[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-                r'Commenced[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-            ],
-            'end_date': [
-                r'(?:End|Completion|Finish)\s+Date[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-                r'Rig\s+Release[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-                r'TD\s+Reached[:\s]+(\d{1,2}[\s\-/\.]\w+[\s\-/\.]\d{2,4})',
-            ]
-        }
-        
-        # Section keywords for Pass 3 (Narrative)
-        self.geology_keywords = [
-            'geology', 'lithology', 'formation', 'stratigraphy',
-            'drilling hazards', 'gas shows', 'formation instability'
-        ]
-        
-        logger.info(f"WellSummaryAgent initialized (LLM available: {self.llm_available}, pdfplumber: {PDFPLUMBER_AVAILABLE})")
+        logger.info(f"WellSummaryAgent initialized (LLM available: {self.llm_available}, DB available: {database_manager is not None})")
     
-    def generate_summary(self, pdf_path: str, document_data: Optional[Dict] = None) -> Dict[str, Any]:
+    def generate_summary(self, well_name: str, narrative_context: Optional[str] = None) -> Dict[str, Any]:
         """
-        Generate comprehensive End of Well Summary
+        Generate comprehensive End of Well Summary (Mode B)
+        
+        Uses all 8 data types:
+        1. General Data (from DB)
+        2. Timeline (from DB)
+        3. Depths (from DB)
+        4. Casing (from DB)
+        5. Cementing (from DB)
+        6. Fluids (from DB)
+        7. Geology - Formations (from DB) + Narrative (from vector store)
+        8. Incidents (from DB)
         
         Args:
-            pdf_path: Path to PDF file
-            document_data: Optional pre-processed document data from IngestionAgent
+            well_name: Well name to generate summary for
+            narrative_context: Optional narrative text from vector store
             
         Returns:
             Dict containing:
             {
-                'metadata': Dict (Pass 1 results),
-                'technical_specs': Dict (Pass 2 results),
-                'narrative': Dict (Pass 3 results),
+                'well_data': Dict (all 8 data types from database),
                 'summary_report': str (formatted final report),
                 'confidence': float
             }
         """
-        logger.info(f"Generating 3-pass summary for: {pdf_path}")
+        if not self.db:
+            logger.error("Database manager not initialized - cannot generate summary")
+            return {
+                'well_data': {},
+                'summary_report': "Error: Database not available",
+                'confidence': 0.0
+            }
         
-        # Pass 1: Metadata Extraction
-        logger.info("⏳ Pass 1: Extracting metadata...")
-        metadata = self._pass1_metadata_extraction(pdf_path)
-        logger.info(f"✓ Pass 1 complete: Found {len(metadata)} metadata fields")
+        logger.info(f"Generating summary for: {well_name}")
         
-        # Pass 2: Technical Specs (Tables)
-        logger.info("⏳ Pass 2: Extracting technical specs...")
-        technical_specs = self._pass2_technical_specs_extraction(pdf_path)
-        logger.info(f"✓ Pass 2 complete: Found {len(technical_specs.get('casing_program', []))} casing strings")
+        # Get all data from database
+        logger.info("⏳ Fetching data from database...")
+        well_summary = self.db.get_well_summary(well_name)
         
-        # Pass 3: Narrative Extraction
-        logger.info("⏳ Pass 3: Extracting narrative...")
-        narrative = self._pass3_narrative_extraction(pdf_path, document_data)
-        logger.info(f"✓ Pass 3 complete: Extracted narrative sections")
+        if not well_summary:
+            logger.warning(f"No data found for {well_name}")
+            return {
+                'well_data': {},
+                'summary_report': f"No data found for well: {well_name}",
+                'confidence': 0.0
+            }
+        
+        logger.info("✓ Database fetch complete")
         
         # Generate final report
-        logger.info("⏳ Generating final summary report...")
-        summary_report = self._generate_summary_report(metadata, technical_specs, narrative)
+        logger.info("⏳ Generating summary report...")
+        summary_report = self._generate_summary_report_from_db(well_summary, narrative_context)
         logger.info("✓ Summary report generated")
         
         # Calculate confidence
-        confidence = self._calculate_confidence(metadata, technical_specs, narrative)
+        confidence = self._calculate_confidence_from_db(well_summary)
         
         return {
-            'metadata': metadata,
-            'technical_specs': technical_specs,
-            'narrative': narrative,
+            'well_data': well_summary,
             'summary_report': summary_report,
             'confidence': confidence
         }
@@ -564,166 +552,268 @@ JSON response:"""
             'hazards': hazards_data.get('hazards', [])
         }
     
-    def _generate_summary_report(self, metadata: Dict, technical_specs: Dict, narrative: Dict) -> str:
+    def _generate_summary_report_from_db(self, well_summary: Dict, narrative_context: Optional[str] = None) -> str:
         """
-        Final Output Generator: generate_summary_report(data_object)
+        Generate summary report from database data (all 8 data types)
         
-        Logic:
-        - Take structured JSON from Passes 1, 2, 3
-        - Send to ollama with prompt:
-          "You are a Drilling Engineer. Write a professional 'End of Well Summary' based on this JSON data.
-           Use bold headers. Include the Casing Table with ID values."
-        
-        Constraints:
-        - Handle JSON parsing errors robustly
-        - Use Python type hints
-        - Do not execute external APIs
+        Args:
+            well_summary: Complete well data from database
+            narrative_context: Optional narrative text from vector store
+            
+        Returns:
+            Formatted Markdown summary report
         """
         if not self.llm_available:
             # Fallback: generate basic report without LLM
-            return self._generate_basic_report(metadata, technical_specs, narrative)
-        
-        # Prepare data object
-        data_object = {
-            'metadata': metadata,
-            'technical_specs': technical_specs,
-            'narrative': narrative
-        }
+            return self._generate_basic_report_from_db(well_summary, narrative_context)
         
         # Convert to JSON string
-        data_json = json.dumps(data_object, indent=2)
+        data_json = json.dumps(well_summary, indent=2, default=str)
         
-        prompt = f"""You are a Drilling Engineer. Write a professional "End of Well Summary" based on this extracted data.
+        prompt = f"""You are a Drilling Engineer. Write a professional "End of Well Summary" based on this database data.
 
-Extracted Data (JSON):
+Complete Well Data (JSON):
 {data_json}
+
+Additional Narrative Context:
+{narrative_context if narrative_context else "No additional narrative available"}
 
 Requirements:
 1. Use bold Markdown headers (## for sections, ### for subsections)
-2. Include all available metadata (Operator, Well Name, Rig, Dates, Days Total)
-3. Include a Casing Program table with the following format:
-   | Size | Weight (ppf) | Depth (m) | ID (inches) |
-   Include pipe_id (Inner Diameter) values if available
-4. Include drilling hazards and formation issues if mentioned
-5. Write in professional technical style
-6. Use exact values from the data (do not estimate or round)
-7. If a field is missing or null, write "Not specified" or omit it
+2. Include ALL available data from these 8 categories:
+   - General Data (well name, license, well type, location, coordinates, operator, rig name, target formation)
+   - Drilling Timeline (spud date, end of operations, total days)
+   - Depths (TD measured, TVD, sidetrack start depth if applicable)
+   - Casing & Tubulars (create a table with: Type, OD, Weight, Grade, Connection, Pipe ID Nominal, Pipe ID Drift, Depths)
+   - Cementing (lead/tail volumes, densities, TOC)
+   - Drilling Fluids (hole size, fluid type, density range)
+   - Geology/Formations (formation tops, lithology)
+   - Incidents (gas peaks, stuck pipe, mud losses, NPT)
+3. If data is not available for any category, DO NOT mention that category
+4. Use exact values from the data (do not estimate or round)
+5. Include Pipe ID values (both Nominal and Drift) in the casing table - this is CRUCIAL
+6. Write in professional technical style
+7. Keep it concise but don't skip important data
 
-Write a comprehensive End of Well Summary (300-400 words):"""
+Write a comprehensive End of Well Summary:"""
         
         try:
             response = self.llm._call_ollama(
                 prompt,
-                max_tokens=800,
+                max_tokens=1200,
                 model=self.llm.model_summary,
                 timeout=120
             )
             return response.strip()
         except Exception as e:
             logger.error(f"LLM report generation failed: {e}")
-            return self._generate_basic_report(metadata, technical_specs, narrative)
+            return self._generate_basic_report_from_db(well_summary, narrative_context)
     
-    def _generate_basic_report(self, metadata: Dict, technical_specs: Dict, narrative: Dict) -> str:
-        """Fallback report generator without LLM"""
+    def _generate_basic_report_from_db(self, well_summary: Dict, narrative_context: Optional[str] = None) -> str:
+        """Fallback report generator without LLM using database data"""
         lines = []
         
         lines.append("## End of Well Summary")
         lines.append("")
         
-        # Metadata section
-        lines.append("### Well Information")
-        if metadata.get('well_name'):
-            lines.append(f"**Well Name:** {metadata['well_name']}")
-        if metadata.get('operator_name'):
-            lines.append(f"**Operator:** {metadata['operator_name']}")
-        if metadata.get('rig_name'):
-            lines.append(f"**Rig:** {metadata['rig_name']}")
-        if metadata.get('spud_date'):
-            lines.append(f"**Spud Date:** {metadata['spud_date']}")
-        if metadata.get('end_date'):
-            lines.append(f"**End Date:** {metadata['end_date']}")
-        if metadata.get('days_total'):
-            lines.append(f"**Total Days:** {metadata['days_total']} days")
-        lines.append("")
-        
-        # Casing program
-        casing_program = technical_specs.get('casing_program', [])
-        if casing_program:
-            lines.append("### Casing Program")
+        # 1. General Data
+        well_info = well_summary.get('well_info', {})
+        if well_info:
+            lines.append("### General Information")
+            if well_info.get('well_name'):
+                lines.append(f"**Well Name:** {well_info['well_name']}")
+            if well_info.get('license_number'):
+                lines.append(f"**License:** {well_info['license_number']}")
+            if well_info.get('well_type'):
+                lines.append(f"**Well Type:** {well_info['well_type']}")
+            if well_info.get('location'):
+                lines.append(f"**Location:** {well_info['location']}")
+            if well_info.get('coordinate_x') and well_info.get('coordinate_y'):
+                lines.append(f"**Coordinates:** X={well_info['coordinate_x']}, Y={well_info['coordinate_y']}")
+            if well_info.get('operator'):
+                lines.append(f"**Operator:** {well_info['operator']}")
+            if well_info.get('rig_name'):
+                lines.append(f"**Rig:** {well_info['rig_name']}")
+            if well_info.get('target_formation'):
+                lines.append(f"**Target Formation:** {well_info['target_formation']}")
             lines.append("")
-            lines.append("| Size | Weight (ppf) | Depth | ID |")
-            lines.append("|------|--------------|-------|-----|")
             
-            for casing in casing_program:
-                size = casing.get('size', 'N/A')
+            # 2. Timeline
+            lines.append("### Drilling Timeline")
+            if well_info.get('spud_date'):
+                lines.append(f"**Spud Date:** {well_info['spud_date']}")
+            if well_info.get('end_of_operations'):
+                lines.append(f"**End of Operations:** {well_info['end_of_operations']}")
+            if well_info.get('total_days'):
+                lines.append(f"**Total Days:** {well_info['total_days']} days")
+            lines.append("")
+            
+            # 3. Depths
+            lines.append("### Depths")
+            if well_info.get('total_depth_md'):
+                lines.append(f"**Total Depth (MD):** {well_info['total_depth_md']} m")
+            if well_info.get('total_depth_tvd'):
+                lines.append(f"**Total Depth (TVD):** {well_info['total_depth_tvd']} m")
+            if well_info.get('sidetrack_start_depth_md'):
+                lines.append(f"**Sidetrack Start Depth:** {well_info['sidetrack_start_depth_md']} m")
+            lines.append("")
+        
+        # 4. Casing & Tubulars
+        casings = well_summary.get('casing_strings', [])
+        if casings:
+            lines.append("### Casing & Tubulars")
+            lines.append("")
+            lines.append("| Type | OD (in) | Weight (lb/ft) | Grade | Connection | ID Nominal (in) | ID Drift (in) | Top (m) | Bottom (m) |")
+            lines.append("|------|---------|----------------|-------|------------|-----------------|---------------|---------|------------|")
+            
+            for casing in casings:
+                ctype = casing.get('casing_type', 'N/A')
+                od = casing.get('outer_diameter', 'N/A')
                 weight = casing.get('weight', 'N/A')
-                depth = casing.get('depth', 'N/A')
-                pipe_id = casing.get('pipe_id', 'N/A')
+                grade = casing.get('grade', 'N/A')
+                connection = casing.get('connection_type', 'N/A')
+                id_nom = casing.get('pipe_id_nominal', 'N/A')
+                id_drift = casing.get('pipe_id_drift', 'N/A')
+                top = casing.get('top_depth_md', 'N/A')
+                bottom = casing.get('bottom_depth_md', 'N/A')
                 
-                if pipe_id and pipe_id != 'N/A':
-                    pipe_id_str = f"{pipe_id} in" if isinstance(pipe_id, (int, float)) else str(pipe_id)
-                else:
-                    pipe_id_str = "Not specified"
-                
-                lines.append(f"| {size} | {weight} | {depth} | {pipe_id_str} |")
+                lines.append(f"| {ctype} | {od} | {weight} | {grade} | {connection} | {id_nom} | {id_drift} | {top} | {bottom} |")
             
             lines.append("")
         
-        # Narrative section
-        if narrative.get('hazards') or narrative.get('instabilities') or narrative.get('gas_shows'):
-            lines.append("### Geology & Drilling Hazards")
-            
-            if narrative.get('instabilities'):
-                lines.append("**Formation Instabilities:**")
-                for item in narrative['instabilities']:
-                    lines.append(f"- {item}")
+        # 5. Cementing
+        cementing = well_summary.get('cementing', [])
+        if cementing:
+            lines.append("### Cementing Operations")
+            for cement in cementing:
+                stage = cement.get('stage_number', 'N/A')
+                lines.append(f"**Stage {stage}:**")
+                if cement.get('lead_volume'):
+                    lines.append(f"- Lead: {cement['lead_volume']} m³ @ {cement.get('lead_density', 'N/A')} kg/m³")
+                if cement.get('tail_volume'):
+                    lines.append(f"- Tail: {cement['tail_volume']} m³ @ {cement.get('tail_density', 'N/A')} kg/m³")
+                if cement.get('top_of_cement_md'):
+                    lines.append(f"- TOC: {cement['top_of_cement_md']} m MD")
                 lines.append("")
+        
+        # 6. Drilling Fluids
+        fluids = well_summary.get('drilling_fluids', [])
+        if fluids:
+            lines.append("### Drilling Fluids")
+            for fluid in fluids:
+                hole_size = fluid.get('hole_size', 'N/A')
+                fluid_type = fluid.get('fluid_type', 'N/A')
+                density_min = fluid.get('density_min')
+                density_max = fluid.get('density_max')
+                
+                line = f"**{hole_size} in hole:** {fluid_type}"
+                if density_min and density_max:
+                    line += f", Density: {density_min}-{density_max} kg/m³"
+                lines.append(line)
+            lines.append("")
+        
+        # 7. Geology/Formations
+        formations = well_summary.get('formations', [])
+        if formations:
+            lines.append("### Geology - Formation Tops")
+            lines.append("")
+            lines.append("| Formation | Top MD (m) | Top TVD (m) | Lithology |")
+            lines.append("|-----------|------------|-------------|-----------|")
             
-            if narrative.get('gas_shows'):
-                lines.append("**Gas Shows:**")
-                for item in narrative['gas_shows']:
-                    lines.append(f"- {item}")
-                lines.append("")
+            for fm in formations:
+                name = fm.get('formation_name', 'N/A')
+                top_md = fm.get('top_md', 'N/A')
+                top_tvd = fm.get('top_tvd', 'N/A')
+                lithology = fm.get('lithology', 'N/A')
+                
+                lines.append(f"| {name} | {top_md} | {top_tvd} | {lithology} |")
             
-            if narrative.get('hazards'):
-                lines.append("**Drilling Hazards:**")
-                for item in narrative['hazards']:
-                    lines.append(f"- {item}")
+            lines.append("")
+        
+        # 8. Incidents
+        incidents = well_summary.get('incidents', [])
+        if incidents:
+            lines.append("### Incidents & Problems")
+            for incident in incidents:
+                date = incident.get('date', 'N/A')
+                itype = incident.get('incident_type', 'Unknown')
+                desc = incident.get('description', '')
+                depth = incident.get('depth_md')
+                
+                line = f"**{date} - {itype}**"
+                if depth:
+                    line += f" (at {depth} m MD)"
+                lines.append(line)
+                if desc:
+                    lines.append(f"  {desc}")
                 lines.append("")
+        
+        # Add narrative context if available
+        if narrative_context:
+            lines.append("### Additional Context")
+            lines.append(narrative_context[:500])  # First 500 chars
+            lines.append("")
         
         lines.append("---")
-        lines.append("*Summary generated using 3-pass extraction system*")
+        lines.append("*Summary generated from database and vector store*")
         
         return "\n".join(lines)
     
-    def _calculate_confidence(self, metadata: Dict, technical_specs: Dict, narrative: Dict) -> float:
+    def _calculate_confidence_from_db(self, well_summary: Dict) -> float:
         """
-        Calculate confidence score for the summary
+        Calculate confidence score based on data completeness
         
-        Score components:
-        - Metadata completeness: 40% (dates, names)
-        - Technical specs: 40% (casing program with IDs)
-        - Narrative: 20% (geology/hazards)
+        Score based on 8 data types (each worth 12.5%):
+        1. General Data
+        2. Timeline  
+        3. Depths
+        4. Casing
+        5. Cementing
+        6. Fluids
+        7. Formations
+        8. Incidents
         """
         score = 0.0
         
-        # Metadata (40%)
-        metadata_fields = ['well_name', 'operator_name', 'spud_date', 'end_date', 'days_total']
-        metadata_count = sum(1 for field in metadata_fields if metadata.get(field))
-        score += 0.40 * (metadata_count / len(metadata_fields))
+        well_info = well_summary.get('well_info', {})
         
-        # Technical specs (40%)
-        casing_program = technical_specs.get('casing_program', [])
-        if casing_program:
-            # Check if IDs are present
-            ids_present = sum(1 for c in casing_program if c.get('pipe_id'))
-            id_rate = ids_present / len(casing_program) if casing_program else 0
-            score += 0.40 * id_rate
+        # 1. General Data (12.5%)
+        general_fields = ['well_name', 'license_number', 'operator', 'location', 'rig_name', 'target_formation']
+        general_count = sum(1 for field in general_fields if well_info.get(field))
+        score += 0.125 * (general_count / len(general_fields))
         
-        # Narrative (20%)
-        narrative_fields = ['hazards', 'instabilities', 'gas_shows']
-        narrative_count = sum(1 for field in narrative_fields if narrative.get(field))
-        score += 0.20 * (narrative_count / len(narrative_fields))
+        # 2. Timeline (12.5%)
+        timeline_fields = ['spud_date', 'end_of_operations', 'total_days']
+        timeline_count = sum(1 for field in timeline_fields if well_info.get(field))
+        score += 0.125 * (timeline_count / len(timeline_fields))
+        
+        # 3. Depths (12.5%)
+        depth_fields = ['total_depth_md', 'total_depth_tvd']
+        depth_count = sum(1 for field in depth_fields if well_info.get(field))
+        score += 0.125 * (depth_count / len(depth_fields))
+        
+        # 4. Casing (12.5%) - CRITICAL: check for pipe IDs
+        casings = well_summary.get('casing_strings', [])
+        if casings:
+            ids_present = sum(1 for c in casings if c.get('pipe_id_nominal') or c.get('pipe_id_drift'))
+            id_rate = ids_present / len(casings) if casings else 0
+            score += 0.125 * id_rate
+        
+        # 5. Cementing (12.5%)
+        if well_summary.get('cementing'):
+            score += 0.125
+        
+        # 6. Fluids (12.5%)
+        if well_summary.get('drilling_fluids'):
+            score += 0.125
+        
+        # 7. Formations (12.5%)
+        if well_summary.get('formations'):
+            score += 0.125
+        
+        # 8. Incidents (12.5%)
+        if well_summary.get('incidents'):
+            score += 0.125
         
         return round(score, 2)
     

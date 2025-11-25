@@ -148,6 +148,8 @@ class HybridRetrievalAgent:
         casings = well_summary.get('casing_strings', [])
         formations = well_summary.get('formations', [])
         cementing = well_summary.get('cementing', [])
+        fluids = well_summary.get('drilling_fluids', [])
+        incidents = well_summary.get('incidents', [])
         
         # Add well basic info
         if well_info:
@@ -158,7 +160,7 @@ class HybridRetrievalAgent:
             })
         
         # Add casing data if relevant
-        if casings and re.search(r'\b(?:casing|pipe|tubular|string)\b', query, re.IGNORECASE):
+        if casings and re.search(r'\b(?:casing|pipe|tubular|string|id|od|diameter)\b', query, re.IGNORECASE):
             results.append({
                 'type': 'casing',
                 'data': casings,
@@ -179,6 +181,22 @@ class HybridRetrievalAgent:
                 'type': 'cementing',
                 'data': cementing,
                 'text': self._format_cementing_data(cementing)
+            })
+        
+        # Add fluids data if relevant
+        if fluids and re.search(r'\b(?:fluid|mud|density|hole size)\b', query, re.IGNORECASE):
+            results.append({
+                'type': 'fluids',
+                'data': fluids,
+                'text': self._format_fluids_data(fluids)
+            })
+        
+        # Add incidents data if relevant
+        if incidents and re.search(r'\b(?:incident|problem|stuck|loss|kick|gas|npt)\b', query, re.IGNORECASE):
+            results.append({
+                'type': 'incidents',
+                'data': incidents,
+                'text': self._format_incidents_data(incidents)
             })
         
         logger.info(f"Database query returned {len(results)} result sets")
@@ -313,6 +331,63 @@ class HybridRetrievalAgent:
             if volume:
                 line += f", {volume}m³"
             
+            if page:
+                line += f" [Source: Page {page}]"
+            lines.append(line)
+        
+        return '\n'.join(lines)
+    
+    def _format_fluids_data(self, fluids: List[Dict]) -> str:
+        """Format drilling fluids"""
+        lines = ["Drilling Fluids:"]
+        for fluid in fluids:
+            hole_size = fluid.get('hole_size')
+            fluid_type = fluid.get('fluid_type')
+            density_min = fluid.get('density_min')
+            density_max = fluid.get('density_max')
+            page = fluid.get('source_page')
+            
+            parts = []
+            if hole_size:
+                parts.append(f"{hole_size} inch hole")
+            if fluid_type:
+                parts.append(f"{fluid_type}")
+            if density_min and density_max:
+                parts.append(f"density: {density_min}-{density_max} kg/m³")
+            elif density_min:
+                parts.append(f"density: {density_min} kg/m³")
+            
+            line = f"  - {', '.join(parts)}"
+            if page:
+                line += f" [Source: Page {page}]"
+            lines.append(line)
+        
+        return '\n'.join(lines)
+    
+    def _format_incidents_data(self, incidents: List[Dict]) -> str:
+        """Format incidents"""
+        lines = ["Incidents:"]
+        for incident in incidents:
+            date = incident.get('date')
+            incident_type = incident.get('incident_type')
+            description = incident.get('description')
+            depth = incident.get('depth_md')
+            severity = incident.get('severity')
+            page = incident.get('source_page')
+            
+            parts = []
+            if date:
+                parts.append(f"Date: {date}")
+            if incident_type:
+                parts.append(f"Type: {incident_type}")
+            if depth:
+                parts.append(f"at {depth}m MD")
+            if severity:
+                parts.append(f"Severity: {severity}")
+            
+            line = f"  - {', '.join(parts)}"
+            if description:
+                line += f"\n    Description: {description}"
             if page:
                 line += f" [Source: Page {page}]"
             lines.append(line)
