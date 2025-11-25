@@ -71,7 +71,7 @@ class GeothermalRAGSystem:
         self.memory = ChatMemory()
         
         # Initialize hybrid retrieval (queries both DB and semantic)
-        self.hybrid_retrieval = HybridRetrievalAgent(self.db, self.rag)
+        self.hybrid_retrieval = HybridRetrievalAgent(self.db, self.rag, config=config_path)
         
         self.indexed_documents = []
         self.llm_available = self.llm.is_available()

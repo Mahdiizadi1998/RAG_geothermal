@@ -20,16 +20,29 @@ class HybridRetrievalAgent:
     No classification - always queries both sources
     """
     
-    def __init__(self, database_manager, rag_retrieval_agent):
+    def __init__(self, database_manager, rag_retrieval_agent, config=None):
         """
         Initialize hybrid retrieval
         
         Args:
             database_manager: WellDatabaseManager instance
             rag_retrieval_agent: RAGRetrievalAgent instance (for semantic search)
+            config: Optional config dict or path for LLM helper
         """
         self.db = database_manager
         self.semantic_rag = rag_retrieval_agent
+        
+        # Initialize LLM helper for SQL generation
+        try:
+            from agents.llm_helper import OllamaHelper
+            self.llm = OllamaHelper(config)
+            self.llm_available = self.llm.is_available()
+            if self.llm_available:
+                logger.info("LLM available for intelligent SQL query generation")
+        except Exception as e:
+            logger.warning(f"LLM not available for SQL generation: {e}")
+            self.llm = None
+            self.llm_available = False
     
     def retrieve(self, query: str, well_name: Optional[str] = None, 
                 top_k: int = 10) -> Dict[str, Any]:
@@ -67,14 +80,13 @@ class HybridRetrievalAgent:
     
     def _query_database(self, query: str, well_name: Optional[str]) -> List[Dict]:
         """
-        Query database - converts natural language to appropriate data retrieval
+        Query database with intelligent SQL generation
         
         The database stores:
         - Complete tables with ALL data (text, numbers, measurements)
-        - Well information (metadata, dates, locations)
-        - Each table has headers_json and rows_json fields
+        - Each table has headers_json, rows_json, and table_type fields
         
-        We retrieve complete tables and let the LLM extract the specific answer
+        Uses LLM to generate smart SQL filters based on question
         """
         results = []
         
@@ -82,9 +94,25 @@ class HybridRetrievalAgent:
             logger.warning("No well name provided for database query")
             return results
         
-        # Get ALL complete tables for the well
-        # The LLM will search through these to find the specific answer
-        tables = self.db.get_complete_tables(well_name)
+        # Try intelligent SQL generation if LLM available
+        if self.llm_available and self.llm:
+            try:
+                # Generate SQL filter based on query
+                sql_filter = self.llm.generate_sql_filter(query, well_name)
+                
+                # Execute smart SQL query
+                sql = f"SELECT * FROM complete_tables WHERE well_name = ? AND ({sql_filter}) ORDER BY source_page"
+                tables = self.db.query_sql(sql, (well_name,))
+                
+                logger.info(f"Smart SQL query returned {len(tables)} tables (filter: {sql_filter})")
+                
+            except Exception as e:
+                logger.warning(f"Smart SQL generation failed: {e}, falling back to simple query")
+                # Fallback: Get all tables
+                tables = self.db.get_complete_tables(well_name)
+        else:
+            # Fallback: Get all tables
+            tables = self.db.get_complete_tables(well_name)
         
         if not tables:
             logger.warning(f"No tables found for {well_name}")

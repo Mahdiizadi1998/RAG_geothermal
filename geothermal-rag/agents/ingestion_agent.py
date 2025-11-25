@@ -263,7 +263,7 @@ class IngestionAgent:
     
     def process_and_store_complete_tables(self, pdf_path: str, well_names: List[str]) -> int:
         """
-        Extract complete tables from PDF and store in database
+        Extract complete tables from PDF and store in database with LLM classification
         Stores entire table structure, not individual rows
         
         Args:
@@ -287,20 +287,45 @@ class IngestionAgent:
         tables = self.extract_tables(pdf_path)
         stored_count = 0
         
+        # Import LLM helper for classification (lazy import to avoid circular dependency)
+        try:
+            from agents.llm_helper import OllamaHelper
+            llm = OllamaHelper()
+            llm_available = llm.is_available()
+            if llm_available:
+                logger.info("Using LLM for intelligent table classification")
+        except Exception as e:
+            logger.warning(f"LLM not available for table classification: {e}")
+            llm_available = False
+        
         for table in tables:
             try:
+                # Classify table type using LLM if available
+                if llm_available and llm:
+                    try:
+                        table_type = llm.classify_table(
+                            headers=table['headers'],
+                            rows=table['rows'],
+                            page=table['page']
+                        )
+                    except Exception as e:
+                        logger.warning(f"LLM classification failed for table on page {table['page']}: {e}")
+                        table_type = 'auto_detected'
+                else:
+                    table_type = 'auto_detected'
+                
                 # Store complete table with all data
                 table_id = self.db.store_complete_table(
                     well_name=primary_well,
                     source_document=Path(pdf_path).name,
                     page=table['page'],
-                    table_type='auto_detected',
+                    table_type=table_type,
                     table_reference=table['metadata'].get('table_ref', f"Table on page {table['page']}"),
                     headers=table['headers'],
                     rows=table['rows']
                 )
                 stored_count += 1
-                logger.debug(f"  Stored complete table {table_id} from page {table['page']}")
+                logger.debug(f"  Stored table {table_id} (type: {table_type}) from page {table['page']}")
                 
             except Exception as e:
                 logger.error(f"Failed to store table on page {table['page']}: {str(e)}")

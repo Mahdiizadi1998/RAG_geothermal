@@ -360,4 +360,138 @@ Factual Summary ({word_count_range}, grounded only in provided content, with cit
             return response.status_code == 200
         except:
             return False
+    
+    def classify_table(self, headers: List[str], rows: List[List], page: int = None) -> str:
+        """
+        Classify table type using LLM
+        
+        Args:
+            headers: List of column headers
+            rows: List of rows (first 3 rows used for classification)
+            page: Optional page number for context
+            
+        Returns:
+            Table type: Casing, Cementing, Fluids, Formations, Timeline, Depths, Incidents, or General
+        """
+        # Format table preview
+        preview_rows = rows[:3]  # Only use first 3 rows
+        table_preview = f"Headers: {headers}\nFirst 3 rows: {preview_rows}"
+        
+        prompt = f"""Classify this table from a geothermal well report into ONE category.
+
+{table_preview}
+
+Categories:
+- Casing: Casing strings, tubulars, pipe specifications (OD, ID, weight, grade, depth)
+- Cementing: Cement jobs, volumes, densities, TOC (top of cement)
+- Fluids: Drilling fluids, mud properties, density, viscosity
+- Formations: Geological formations, lithology, depths, stratigraphy
+- Timeline: Dates, operations schedule, spud date, completion date
+- Depths: Well depths, TD, TVD, measured depth, true vertical depth
+- Incidents: Problems, gas peaks, stuck pipe, losses, kicks
+- General: Other data not fitting above categories
+
+Rules:
+- Look at column names in headers
+- Check data types in rows (depths, dates, materials)
+- Return ONLY the category name (one word)
+- If uncertain, return 'General'
+
+Category:"""
+        
+        try:
+            response = self._call_ollama(prompt, max_tokens=10, model=self.model_qa)
+            # Extract first word and validate
+            category = response.strip().split()[0]
+            valid_categories = ['Casing', 'Cementing', 'Fluids', 'Formations', 'Timeline', 'Depths', 'Incidents', 'General']
+            
+            if category in valid_categories:
+                logger.info(f"Table classified as: {category}")
+                return category
+            else:
+                logger.warning(f"Invalid category '{category}', defaulting to 'General'")
+                return 'General'
+        except Exception as e:
+            logger.error(f"Table classification failed: {e}")
+            return 'auto_detected'  # Fallback
+    
+    def generate_sql_filter(self, query: str, well_name: str) -> str:
+        """
+        Generate SQL WHERE clause from natural language query
+        
+        Args:
+            query: User's natural language question
+            well_name: Well name being queried
+            
+        Returns:
+            SQL WHERE clause (without WHERE keyword)
+        """
+        prompt = f"""You are a SQL query generator for a geothermal well database.
+
+Database Schema:
+- Table name: complete_tables
+- Columns: well_name, source_page, table_type, table_reference, headers_json, rows_json
+
+Available table_types:
+- Casing: Casing strings, pipe specifications
+- Cementing: Cement operations, volumes, densities
+- Fluids: Drilling fluids, mud properties
+- Formations: Geological formations, lithology
+- Timeline: Dates, operations schedule
+- Depths: Well depths, TD, TVD
+- Incidents: Problems, gas peaks, losses
+- General: Other data
+
+User Question: "{query}"
+Well Name: "{well_name}"
+
+Generate a SQL filter to retrieve ONLY relevant tables.
+
+Examples:
+Q: "What is the casing design?"
+A: table_type = 'Casing'
+
+Q: "When was the well spudded?"
+A: table_type IN ('Timeline', 'General')
+
+Q: "What formations were encountered at 2000m?"
+A: table_type = 'Formations'
+
+Q: "Tell me about cementing operations"
+A: table_type = 'Cementing'
+
+Q: "What problems occurred during drilling?"
+A: table_type = 'Incidents'
+
+Q: "Summarize the well"
+A: 1=1
+
+Rules:
+- Return ONLY the WHERE clause (without 'WHERE' keyword)
+- Use table_type for filtering
+- Use IN (...) for multiple types
+- Use 1=1 for broad/general questions
+- Do not include well_name filter (already handled)
+
+SQL Filter:"""
+        
+        try:
+            response = self._call_ollama(prompt, max_tokens=50, model=self.model_qa)
+            # Clean up response
+            sql_filter = response.strip()
+            
+            # Basic validation
+            if 'DELETE' in sql_filter.upper() or 'DROP' in sql_filter.upper() or 'INSERT' in sql_filter.upper():
+                logger.warning(f"Potentially unsafe SQL detected: {sql_filter}")
+                return "1=1"  # Safe fallback
+            
+            # Remove quotes if LLM added them
+            sql_filter = sql_filter.strip('"').strip("'")
+            
+            logger.info(f"Generated SQL filter: {sql_filter}")
+            return sql_filter
+            
+        except Exception as e:
+            logger.error(f"SQL generation failed: {e}")
+            return "1=1"  # Safe fallback - return all tables
 
