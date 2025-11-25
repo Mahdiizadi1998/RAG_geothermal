@@ -389,15 +389,18 @@ class IngestionAgent:
     
     def _find_wells_in_caption(self, page_text: str, table_ref: str, document_wells: List[str]) -> List[str]:
         """
-        Find well names in table caption (header above or below table)
-        
-        Searches for well names in the table title AFTER the table reference.
-        Example: "Table 4-1: ABC-GT-01 Casing Details" → finds ABC-GT-01
+        Find well names in table caption (1 line before + same line + 1 line after)
         
         Strategy:
-        - Look ONLY FORWARD from table reference (not backward to avoid previous table mentions)
-        - Extract until next newline or max 150 chars (typical caption length)
-        - This captures the table title without pollution from surrounding text
+        - Extract the line containing table reference
+        - Extract 1 line BEFORE (header)
+        - Extract 1 line AFTER (caption)
+        - BUT: Stop at empty lines (line breaks) to avoid pollution
+        
+        Examples:
+          "ABC-GT-01 Casing Data\nTable 5-1: Details\n[table]" → finds ABC-GT-01
+          "Table 5-1: ABC-GT-01 Details\n\nNext section..." → finds ABC-GT-01, stops at empty line
+          "Table 5-1: Comparison\nNote: ABC-GT-01 and XYZ-GT-02" → finds both
         
         Args:
             page_text: Full text of the page
@@ -411,22 +414,51 @@ class IngestionAgent:
             return []
         
         # Find table reference position in page text
-        ref_pos = page_text.lower().find(table_ref.lower())
+        ref_pos = page_text.find(table_ref)
         if ref_pos == -1:
             return []
         
-        # Extract text ONLY AFTER table reference (caption/title)
-        # Stop at newline or max 150 chars (typical table title length)
-        start = ref_pos + len(table_ref)
-        end = min(len(page_text), start + 150)
+        # Find the line containing table reference
+        line_start = page_text.rfind('\n', 0, ref_pos)
+        if line_start == -1:
+            line_start = 0
+        else:
+            line_start += 1  # Skip the \n
         
-        # Find next newline to avoid capturing unrelated text
-        caption_text = page_text[start:end]
-        newline_pos = caption_text.find('\n')
-        if newline_pos != -1:
-            caption_text = caption_text[:newline_pos]
+        line_end = page_text.find('\n', ref_pos)
+        if line_end == -1:
+            line_end = len(page_text)
         
-        # Find well names in caption (should be in table title)
+        current_line = page_text[line_start:line_end]
+        
+        # Extract 1 line BEFORE (if exists and not empty)
+        prev_line = ""
+        if line_start > 0:
+            prev_line_start = page_text.rfind('\n', 0, line_start - 1)
+            if prev_line_start == -1:
+                prev_line_start = 0
+            else:
+                prev_line_start += 1
+            prev_line = page_text[prev_line_start:line_start - 1].strip()
+            # If empty line, don't include it
+            if not prev_line:
+                prev_line = ""
+        
+        # Extract 1 line AFTER (if exists and not empty)
+        next_line = ""
+        if line_end < len(page_text):
+            next_line_end = page_text.find('\n', line_end + 1)
+            if next_line_end == -1:
+                next_line_end = len(page_text)
+            next_line = page_text[line_end + 1:next_line_end].strip()
+            # If empty line, don't include it
+            if not next_line:
+                next_line = ""
+        
+        # Combine: prev_line + current_line + next_line
+        caption_text = ' '.join(filter(None, [prev_line, current_line, next_line]))
+        
+        # Find well names in caption
         found_wells = []
         for well in document_wells:
             if well in caption_text:
