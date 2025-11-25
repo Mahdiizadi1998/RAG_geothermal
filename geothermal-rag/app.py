@@ -336,7 +336,7 @@ class GeothermalRAGSystem:
                 'title': '## 1. General Data',
                 'table_types': ['General', 'auto_detected'],
                 'search_query': f"{well_name} well name license type location coordinates operator rig target formation",
-                'extraction_prompt': """Extract the following information:
+                'extraction_prompt': f"""Extract the following information FOR WELL {well_name} ONLY:
 - Well Name
 - License Number
 - Well Type
@@ -346,16 +346,20 @@ class GeothermalRAGSystem:
 - Rig Name
 - Target Formation
 
+CRITICAL: If the context contains data for multiple wells (e.g., comparison tables with columns for different wells), extract ONLY the data for {well_name}. Ignore all other wells.
+
 Format as a bullet list. Only include information that is found."""
             },
             {
                 'title': '## 2. Drilling Timeline',
                 'table_types': ['Timeline', 'General'],
                 'search_query': f"{well_name} spud date completion date end operations drilling timeline duration days",
-                'extraction_prompt': """Extract the following timeline information:
+                'extraction_prompt': f"""Extract the following timeline information FOR WELL {well_name} ONLY:
 - Spud Date
 - End of Operations / Completion Date
 - Total Days / Duration
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list. Only include information that is found."""
             },
@@ -363,10 +367,12 @@ Format as a bullet list. Only include information that is found."""
                 'title': '## 3. Depths',
                 'table_types': ['Depths', 'General'],
                 'search_query': f"{well_name} total depth TD TVD measured depth true vertical sidetrack kickoff",
-                'extraction_prompt': """Extract depth information:
+                'extraction_prompt': f"""Extract depth information FOR WELL {well_name} ONLY:
 - TD (Total Depth in mAH)
 - TVD (True Vertical Depth)
 - Sidetrack Start Depth (if applicable)
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list. Only include information that is found."""
             },
@@ -374,7 +380,7 @@ Format as a bullet list. Only include information that is found."""
                 'title': '## 4. Casing & Tubulars',
                 'table_types': ['Casing'],
                 'search_query': f"{well_name} casing tubing liner conductor surface intermediate production size OD ID weight grade",
-                'extraction_prompt': """Extract casing and tubular information. For EACH casing string, extract:
+                'extraction_prompt': f"""Extract casing and tubular information FOR WELL {well_name} ONLY. For EACH casing string, extract:
 - Type (Conductor, Surface, Intermediate, Production, Liner, etc.)
 - OD (Outside Diameter in inches)
 - Weight (lb/ft)
@@ -384,18 +390,22 @@ Format as a bullet list. Only include information that is found."""
 - Top Depth (mAH)
 - Bottom Depth (mAH)
 
+CRITICAL: If the context contains comparison tables with multiple wells (e.g., columns like "ABC-GT-01" and "XYZ-GT-02"), extract ONLY the {well_name} column data. Ignore all other wells.
+
 Format as a numbered list, one entry per casing string. Include Nominal and Drift ID for each string."""
             },
             {
                 'title': '## 5. Cementing',
                 'table_types': ['Cementing'],
                 'search_query': f"{well_name} cement lead tail slurry volume density TOC top of cement",
-                'extraction_prompt': """Extract cementing information for each cement job:
+                'extraction_prompt': f"""Extract cementing information FOR WELL {well_name} ONLY for each cement job:
 - Lead Slurry Volume
 - Tail Slurry Volume
 - Lead Density (sg or ppg)
 - Tail Density (sg or ppg)
 - TOC (Top of Cement)
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list or numbered list if multiple jobs. Only include information that is found."""
             },
@@ -403,10 +413,12 @@ Format as a bullet list or numbered list if multiple jobs. Only include informat
                 'title': '## 6. Drilling Fluids',
                 'table_types': ['Fluids'],
                 'search_query': f"{well_name} drilling fluid mud type density hole size water oil synthetic",
-                'extraction_prompt': """Extract drilling fluid information:
+                'extraction_prompt': f"""Extract drilling fluid information FOR WELL {well_name} ONLY:
 - Hole Size (inches)
 - Fluid Type (WBM, OBM, SBM, etc.)
 - Density Range (sg or ppg)
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list. List multiple hole sections if present. Only include information that is found."""
             },
@@ -414,10 +426,12 @@ Format as a bullet list. List multiple hole sections if present. Only include in
                 'title': '## 7. Geology & Formations',
                 'table_types': ['Formations', 'General'],
                 'search_query': f"{well_name} formation geology lithology gas show instability overpressure shale sandstone",
-                'extraction_prompt': """Extract geological information:
+                'extraction_prompt': f"""Extract geological information FOR WELL {well_name} ONLY:
 - Formation names and depths
 - Lithology (rock types)
 - Key notes: Gas shows, instability issues, overpressure zones
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list. Only include information that is found."""
             },
@@ -425,11 +439,13 @@ Format as a bullet list. Only include information that is found."""
                 'title': '## 8. Incidents & Issues',
                 'table_types': ['Incidents'],
                 'search_query': f"{well_name} incident stuck pipe gas kick loss circulation mud loss pressure",
-                'extraction_prompt': """Extract incidents and issues:
+                'extraction_prompt': f"""Extract incidents and issues FOR WELL {well_name} ONLY:
 - Gas peaks/kicks
 - Stuck pipe events
 - Mud losses / Lost circulation
 - Other significant drilling problems
+
+CRITICAL: If the context contains data for multiple wells, extract ONLY the data for {well_name}. Ignore all other wells.
 
 Format as a bullet list. Only include information that is found."""
             }
