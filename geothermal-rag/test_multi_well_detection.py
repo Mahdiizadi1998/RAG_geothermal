@@ -4,7 +4,7 @@ Simulates the logic without requiring full dependencies
 """
 
 def find_wells_in_caption(page_text, table_ref, document_wells):
-    """Simplified caption search"""
+    """Simplified caption search - FORWARD ONLY from table reference"""
     if not table_ref or not page_text:
         return []
     
@@ -12,9 +12,15 @@ def find_wells_in_caption(page_text, table_ref, document_wells):
     if ref_pos == -1:
         return []
     
-    start = max(0, ref_pos - 100)
-    end = min(len(page_text), ref_pos + len(table_ref) + 200)
+    # Look ONLY FORWARD from table reference (not backward)
+    start = ref_pos + len(table_ref)
+    end = min(len(page_text), start + 150)
     caption_text = page_text[start:end]
+    
+    # Stop at newline (end of caption)
+    newline_pos = caption_text.find('\n')
+    if newline_pos != -1:
+        caption_text = caption_text[:newline_pos]
     
     return [well for well in document_wells if well in caption_text]
 
@@ -155,12 +161,32 @@ def test_well_detection():
     print(f"✓ Detected wells: {result6}")
     print(f"Expected: Both wells → {'✓ PASS' if len(result6) == 2 else '✗ FAIL'}\n")
     
+    # Test Case 7: CRITICAL - Table for GT-02 but GT-01 mentioned earlier (pollution test)
+    print("TEST 7: CRITICAL - Avoid pollution from previous text")
+    print("-" * 70)
+    table7 = {
+        'headers': ['Type', 'OD', 'Depth'],
+        'rows': [['Production', '7"', '3800 m']],
+        'page_text': 'Previous discussion about ABC-GT-01 operations... Table 6-1: Production Casing for XYZ-GT-02\n\n[table here]',
+        'metadata': {'table_ref': 'Table 6-1'}
+    }
+    result7 = detect_table_wells(table7, document_wells)
+    print(f"Page text: 'Previous discussion about ABC-GT-01 operations...'")
+    print(f"Caption: 'Table 6-1: Production Casing for XYZ-GT-02'")
+    print(f"✓ Detected wells: {result7}")
+    print(f"Expected: ['XYZ-GT-02'] only (NOT ABC-GT-01) → {'✓ PASS' if result7 == ['XYZ-GT-02'] else '✗ FAIL'}")
+    if result7 != ['XYZ-GT-02']:
+        print(f"   ❌ ERROR: Incorrectly assigned to {result7}")
+        print(f"   This is the bug that caused wrong well name in summary!")
+    print()
+    
     print("="*70)
     print("Summary:")
     print("-" * 70)
-    print("✓ Priority 1: Caption detection works")
+    print("✓ Priority 1: Caption detection (FORWARD ONLY from table ref)")
     print("✓ Priority 2: Content detection works (headers + cells)")
     print("✓ Priority 3: Fallback to all wells works")
+    print("✓ CRITICAL: No pollution from text BEFORE table reference")
     print("✓ Multi-well tables stored for each well separately")
     print("="*70)
 

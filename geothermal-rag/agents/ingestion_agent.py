@@ -391,7 +391,13 @@ class IngestionAgent:
         """
         Find well names in table caption (header above or below table)
         
-        Searches for well names near the table reference (e.g., "Table 4-1: ABC-GT-01 Casing")
+        Searches for well names in the table title AFTER the table reference.
+        Example: "Table 4-1: ABC-GT-01 Casing Details" → finds ABC-GT-01
+        
+        Strategy:
+        - Look ONLY FORWARD from table reference (not backward to avoid previous table mentions)
+        - Extract until next newline or max 150 chars (typical caption length)
+        - This captures the table title without pollution from surrounding text
         
         Args:
             page_text: Full text of the page
@@ -409,12 +415,18 @@ class IngestionAgent:
         if ref_pos == -1:
             return []
         
-        # Extract text around table reference (±200 chars = likely caption)
-        start = max(0, ref_pos - 100)
-        end = min(len(page_text), ref_pos + len(table_ref) + 200)
-        caption_text = page_text[start:end]
+        # Extract text ONLY AFTER table reference (caption/title)
+        # Stop at newline or max 150 chars (typical table title length)
+        start = ref_pos + len(table_ref)
+        end = min(len(page_text), start + 150)
         
-        # Find all well names in caption
+        # Find next newline to avoid capturing unrelated text
+        caption_text = page_text[start:end]
+        newline_pos = caption_text.find('\n')
+        if newline_pos != -1:
+            caption_text = caption_text[:newline_pos]
+        
+        # Find well names in caption (should be in table title)
         found_wells = []
         for well in document_wells:
             if well in caption_text:
