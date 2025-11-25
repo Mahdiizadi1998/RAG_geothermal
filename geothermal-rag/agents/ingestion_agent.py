@@ -97,7 +97,9 @@ class IngestionAgent:
         
         # Extract full text
         all_text = []
-        for page_num in range(len(doc)):
+        page_count = len(doc)  # Store page count before closing
+        
+        for page_num in range(page_count):
             page = doc[page_num]
             text = page.get_text()
             all_text.append(text)
@@ -118,7 +120,7 @@ class IngestionAgent:
             'filename': pdf_path.name,
             'filepath': str(pdf_path),
             'content': full_text,
-            'pages': len(doc),
+            'pages': page_count,
             'wells': well_names,
             'metadata': metadata
         }
