@@ -13,15 +13,11 @@ logger = logging.getLogger(__name__)
 
 class HybridRetrievalAgent:
     """
-    Intelligent retrieval that combines:
-    1. SQL database queries for exact numerical/tabular data
-    2. Semantic vector search for narrative/descriptive content
+    Hybrid retrieval that ALWAYS queries:
+    1. Database for complete tables (all data types: text, numbers, etc.)
+    2. Semantic vector search for narrative content
     
-    Query routing logic:
-    - Numerical queries (depth, size, weight, dates) → Database
-    - Table queries (casing program, formations) → Database
-    - Narrative queries (problems, operations, geology description) → Semantic search
-    - Complex queries → Both (database + semantic context)
+    No classification - always queries both sources
     """
     
     def __init__(self, database_manager, rag_retrieval_agent):
@@ -34,191 +30,109 @@ class HybridRetrievalAgent:
         """
         self.db = database_manager
         self.semantic_rag = rag_retrieval_agent
-        
-        # Query classification patterns
-        self.numerical_patterns = [
-            r'\b(?:depth|md|tvd|measured|vertical)\b',
-            r'\b(?:size|diameter|od|id|inch)\b',
-            r'\b(?:weight|lb/ft|kg/m)\b',
-            r'\b(?:date|when|spud|completion)\b',
-            r'\b(?:how deep|how long|how much)\b',
-            r'\b\d+(?:\.\d+)?\s*(?:m|ft|inch|mm)\b'
-        ]
-        
-        self.table_patterns = [
-            r'\b(?:casing|tubular|pipe)\s+(?:program|string|design)\b',
-            r'\b(?:formation|lithology|geology)\s+(?:tops|layers)\b',
-            r'\b(?:cement|cementing)\s+(?:job|stage|operation)\b',
-            r'\b(?:list|show|display)\s+(?:all|the)\b'
-        ]
-        
-        self.narrative_patterns = [
-            r'\b(?:problem|issue|challenge|difficulty)\b',
-            r'\b(?:describe|explain|discuss)\b',
-            r'\b(?:why|how|reason)\b',
-            r'\b(?:operation|activity|procedure)\b',
-            r'\b(?:summary|overview|description)\b'
-        ]
     
     def retrieve(self, query: str, well_name: Optional[str] = None, 
-                mode: str = 'auto', top_k: int = 10) -> Dict[str, Any]:
+                top_k: int = 10) -> Dict[str, Any]:
         """
-        Retrieve information using hybrid approach
+        Retrieve information - ALWAYS queries both database AND semantic search
         
         Args:
             query: User query
             well_name: Well name to focus on (if known)
-            mode: 'auto', 'database', 'semantic', or 'hybrid'
             top_k: Number of results for semantic search
             
         Returns:
             Dict with 'database_results', 'semantic_results', 'combined_text'
         """
-        # Classify query type if mode is auto
-        if mode == 'auto':
-            mode = self._classify_query(query)
-        
-        logger.info(f"Hybrid retrieval mode: {mode} for query: '{query[:50]}...'")
+        logger.info(f"Hybrid retrieval for query: '{query[:50]}...'")
         
         results = {
             'database_results': [],
             'semantic_results': [],
-            'combined_text': '',
-            'mode': mode
+            'combined_text': ''
         }
         
-        # Execute retrieval based on mode
-        if mode in ['database', 'hybrid']:
-            db_results = self._query_database(query, well_name)
-            results['database_results'] = db_results
+        # ALWAYS query database
+        db_results = self._query_database(query, well_name)
+        results['database_results'] = db_results
         
-        if mode in ['semantic', 'hybrid']:
-            semantic_results = self._query_semantic(query, top_k)
-            results['semantic_results'] = semantic_results
+        # ALWAYS query semantic search
+        semantic_results = self._query_semantic(query, top_k)
+        results['semantic_results'] = semantic_results
         
         # Combine results with priority: database > semantic
         results['combined_text'] = self._combine_results(results)
         
         return results
     
-    def _classify_query(self, query: str) -> str:
-        """
-        Classify query to determine retrieval strategy
-        
-        Returns:
-            'database', 'semantic', or 'hybrid'
-        """
-        query_lower = query.lower()
-        
-        # Count pattern matches
-        numerical_matches = sum(1 for p in self.numerical_patterns if re.search(p, query_lower))
-        table_matches = sum(1 for p in self.table_patterns if re.search(p, query_lower))
-        narrative_matches = sum(1 for p in self.narrative_patterns if re.search(p, query_lower))
-        
-        logger.debug(f"Query classification - Numerical: {numerical_matches}, Table: {table_matches}, Narrative: {narrative_matches}")
-        
-        # Scoring logic
-        if (numerical_matches + table_matches) >= 2 and narrative_matches == 0:
-            return 'database'
-        elif narrative_matches >= 2 and (numerical_matches + table_matches) == 0:
-            return 'semantic'
-        elif (numerical_matches + table_matches) > 0 and narrative_matches > 0:
-            return 'hybrid'
-        else:
-            # Default to hybrid for safety
-            return 'hybrid'
-    
     def _query_database(self, query: str, well_name: Optional[str]) -> List[Dict]:
-        """Query database for structured data"""
+        """Get ALL complete tables from database for the well"""
         results = []
         
         if not well_name:
             logger.warning("No well name provided for database query")
             return results
         
-        # Get comprehensive well data
-        well_summary = self.db.get_well_summary(well_name)
+        # Get ALL complete tables
+        tables = self.db.get_complete_tables(well_name)
         
-        if not well_summary:
-            logger.warning(f"No database entry found for {well_name}")
+        if not tables:
+            logger.warning(f"No tables found for {well_name}")
             return results
         
-        # Format database data into structured results
-        well_info = well_summary.get('well_info', {})
-        casings = well_summary.get('casing_strings', [])
-        formations = well_summary.get('formations', [])
-        cementing = well_summary.get('cementing', [])
-        fluids = well_summary.get('drilling_fluids', [])
-        incidents = well_summary.get('incidents', [])
-        
-        # Add well basic info
-        if well_info:
+        # Convert each table to text format
+        for table in tables:
+            table_text = self._format_table_as_text(table)
             results.append({
-                'type': 'well_info',
-                'data': well_info,
-                'text': self._format_well_info(well_info)
+                'type': 'table',
+                'table_type': table.get('table_type', 'unknown'),
+                'page': table.get('source_page'),
+                'text': table_text,
+                'headers': table.get('headers', []),
+                'rows': table.get('rows', [])
             })
         
-        # Add casing data if relevant
-        if casings and re.search(r'\b(?:casing|pipe|tubular|string|id|od|diameter)\b', query, re.IGNORECASE):
-            results.append({
-                'type': 'casing',
-                'data': casings,
-                'text': self._format_casing_data(casings)
-            })
-        
-        # Add formation data if relevant
-        if formations and re.search(r'\b(?:formation|lithology|geology|layer)\b', query, re.IGNORECASE):
-            results.append({
-                'type': 'formations',
-                'data': formations,
-                'text': self._format_formation_data(formations)
-            })
-        
-        # Add cementing data if relevant
-        if cementing and re.search(r'\b(?:cement|cementing|stage)\b', query, re.IGNORECASE):
-            results.append({
-                'type': 'cementing',
-                'data': cementing,
-                'text': self._format_cementing_data(cementing)
-            })
-        
-        # Add fluids data if relevant
-        if fluids and re.search(r'\b(?:fluid|mud|density|hole size)\b', query, re.IGNORECASE):
-            results.append({
-                'type': 'fluids',
-                'data': fluids,
-                'text': self._format_fluids_data(fluids)
-            })
-        
-        # Add incidents data if relevant
-        if incidents and re.search(r'\b(?:incident|problem|stuck|loss|kick|gas|npt)\b', query, re.IGNORECASE):
-            results.append({
-                'type': 'incidents',
-                'data': incidents,
-                'text': self._format_incidents_data(incidents)
-            })
-        
-        logger.info(f"Database query returned {len(results)} result sets")
+        logger.info(f"Database query returned {len(results)} complete tables")
         return results
     
     def _query_semantic(self, query: str, top_k: int) -> List[Dict]:
         """Query semantic vector database"""
         try:
-            # Use existing RAG retrieval agent
-            retrieval_result = self.semantic_rag.retrieve(query, top_k=top_k)
-            
-            if isinstance(retrieval_result, dict):
-                chunks = retrieval_result.get('chunks', [])
-            else:
-                chunks = retrieval_result
-            
+            # Use simplified RAG retrieval agent (returns list of chunks)
+            chunks = self.semantic_rag.retrieve(query, top_k=top_k)
             logger.info(f"Semantic search returned {len(chunks)} chunks")
             return chunks
         
         except Exception as e:
             logger.error(f"Semantic search failed: {str(e)}")
             return []
+    
+    def _format_table_as_text(self, table: Dict) -> str:
+        """Convert complete table to text format for LLM"""
+        parts = []
+        
+        # Table reference and page
+        ref = table.get('table_reference', 'Table')
+        page = table.get('source_page', '?')
+        parts.append(f"{ref} (Page {page})")
+        parts.append("=" * 60)
+        
+        # Headers
+        headers = table.get('headers', [])
+        if headers:
+            parts.append(" | ".join(str(h) for h in headers))
+            parts.append("-" * 60)
+        
+        # Rows (all data: text and numbers)
+        rows = table.get('rows', [])
+        for row in rows[:50]:  # Limit to 50 rows to avoid overwhelming context
+            parts.append(" | ".join(str(cell) for cell in row))
+        
+        if len(rows) > 50:
+            parts.append(f"... ({len(rows) - 50} more rows)")
+        
+        parts.append("")
+        return "\n".join(parts)
     
     def _combine_results(self, results: Dict) -> str:
         """

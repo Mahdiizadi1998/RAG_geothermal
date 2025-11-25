@@ -223,11 +223,32 @@ class WellDatabaseManager:
         )
         """)
         
+        # Complete tables storage - stores entire tables with all data types
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS complete_tables (
+            table_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            well_id INTEGER,
+            well_name TEXT,
+            source_document TEXT,
+            source_page INTEGER,
+            table_type TEXT,
+            table_reference TEXT,
+            headers_json TEXT,
+            rows_json TEXT,
+            num_rows INTEGER,
+            num_cols INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (well_id) REFERENCES wells(well_id)
+        )
+        """)
+        
         # Create indexes for faster queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_well_name ON wells(well_name)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_casing_well ON casing_strings(well_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_formations_well ON formations(well_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_fluids_well ON drilling_fluids(well_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_complete_tables_well ON complete_tables(well_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_complete_tables_type ON complete_tables(table_type)")
         
         self.conn.commit()
         logger.info("Database schema created successfully")
@@ -572,6 +593,95 @@ class WellDatabaseManager:
         cursor.execute("SELECT * FROM wells WHERE well_name = ?", (well_name,))
         result = cursor.fetchone()
         return dict(result) if result else None
+    
+    def store_complete_table(self, well_name: str, source_document: str, 
+                            page: int, table_type: str, table_reference: str,
+                            headers: List[str], rows: List[List[str]]) -> int:
+        """
+        Store a complete table with all data (text and numbers)
+        
+        Args:
+            well_name: Well name
+            source_document: Source filename
+            page: Page number
+            table_type: Type of table (casing, cementing, fluids, etc.)
+            table_reference: Table reference (e.g., "Table 4-1")
+            headers: List of column headers
+            rows: List of rows (each row is a list of cell values)
+            
+        Returns:
+            table_id
+        """
+        cursor = self.conn.cursor()
+        
+        # Get well_id if it exists
+        cursor.execute("SELECT well_id FROM wells WHERE well_name = ?", (well_name,))
+        result = cursor.fetchone()
+        well_id = result['well_id'] if result else None
+        
+        # Store table
+        cursor.execute("""
+        INSERT INTO complete_tables 
+        (well_id, well_name, source_document, source_page, table_type, 
+         table_reference, headers_json, rows_json, num_rows, num_cols)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            well_id,
+            well_name,
+            source_document,
+            page,
+            table_type,
+            table_reference,
+            json.dumps(headers),
+            json.dumps(rows),
+            len(rows),
+            len(headers)
+        ))
+        
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def get_complete_tables(self, well_name: Optional[str] = None, 
+                           table_type: Optional[str] = None) -> List[Dict]:
+        """
+        Retrieve complete tables
+        
+        Args:
+            well_name: Filter by well name (optional)
+            table_type: Filter by table type (optional)
+            
+        Returns:
+            List of table dictionaries with parsed headers and rows
+        """
+        cursor = self.conn.cursor()
+        
+        query = "SELECT * FROM complete_tables WHERE 1=1"
+        params = []
+        
+        if well_name:
+            query += " AND well_name = ?"
+            params.append(well_name)
+        
+        if table_type:
+            query += " AND table_type = ?"
+            params.append(table_type)
+        
+        query += " ORDER BY source_page, table_id"
+        
+        cursor.execute(query, params)
+        tables = []
+        
+        for row in cursor.fetchall():
+            table_dict = dict(row)
+            # Parse JSON fields
+            table_dict['headers'] = json.loads(table_dict['headers_json'])
+            table_dict['rows'] = json.loads(table_dict['rows_json'])
+            # Remove JSON strings
+            del table_dict['headers_json']
+            del table_dict['rows_json']
+            tables.append(table_dict)
+        
+        return tables
     
     def clear_well_data(self, well_name: str):
         """Clear all data for a specific well"""

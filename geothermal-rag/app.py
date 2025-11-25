@@ -1,6 +1,6 @@
 """
 RAG for Geothermal Wells - Main Application
-Gradio UI with agentic workflow for document Q&A, summarization, and parameter extraction
+Gradio UI with simplified workflow for document Q&A and summarization
 """
 
 import gradio as gr
@@ -13,29 +13,15 @@ from typing import List, Dict, Optional, Tuple
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent))
 
-# Import agents
+# Import core agents only
 from agents.ingestion_agent import IngestionAgent
 from agents.preprocessing_agent import PreprocessingAgent
 from agents.rag_retrieval_agent import RAGRetrievalAgent
-from agents.parameter_extraction_agent import ParameterExtractionAgent
-from agents.validation_agent import ValidationAgent
 from agents.chat_memory import ChatMemory
-from agents.ensemble_judge_agent import EnsembleJudgeAgent
 from agents.llm_helper import OllamaHelper
-from agents.well_summary_agent import WellSummaryAgent
-from models.nodal_runner import NodalAnalysisRunner
-
-# Import new validation agents
-from agents.query_analysis_agent import QueryAnalysisAgent
-from agents.fact_verification_agent import FactVerificationAgent
-from agents.physical_validation_agent import PhysicalValidationAgent
-from agents.missing_data_agent import MissingDataAgent
-from agents.confidence_scorer import ConfidenceScorerAgent
 
 # Import hybrid database components
 from agents.database_manager import WellDatabaseManager
-from agents.enhanced_table_parser import EnhancedTableParser
-from agents.template_selector import TemplateSelectorAgent
 from agents.hybrid_retrieval_agent import HybridRetrievalAgent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -73,41 +59,19 @@ class GeothermalRAGSystem:
         # Initialize agents
         logger.info("Initializing agents...")
         
-        # Initialize hybrid database system
+        # Initialize database
         db_path = Path(__file__).parent / 'well_data.db'
         self.db = WellDatabaseManager(str(db_path))
-        self.table_parser = EnhancedTableParser()
         
-        self.ingestion = IngestionAgent(
-            database_manager=self.db,
-            table_parser=self.table_parser
-        )
+        # Initialize core agents
+        self.ingestion = IngestionAgent(database_manager=self.db)
         self.preprocessing = PreprocessingAgent(config_path)
         self.rag = RAGRetrievalAgent(config_path)
-        self.extraction = ParameterExtractionAgent(
-            enable_llm_fallback=self.config['extraction']['enable_llm_fallback']
-        )
-        self.validation = ValidationAgent(config_path)
-        self.memory = ChatMemory()
-        self.judge = EnsembleJudgeAgent()
         self.llm = OllamaHelper(config_path)
-        self.well_summary_agent = WellSummaryAgent(llm_helper=self.llm, database_manager=self.db)
-        self.nodal_runner = NodalAnalysisRunner()
+        self.memory = ChatMemory()
         
-        # Initialize new validation agents
-        self.query_analyzer = QueryAnalysisAgent(self.config)
-        self.fact_verifier = FactVerificationAgent(self.config, database_manager=self.db)
-        self.physical_validator = PhysicalValidationAgent(self.config)
-        self.missing_data_agent = MissingDataAgent(self.config)
-        self.confidence_scorer = ConfidenceScorerAgent(self.config)
-        
-        # Initialize hybrid retrieval and template selector
-        self.template_selector = TemplateSelectorAgent(self.db)
+        # Initialize hybrid retrieval (queries both DB and semantic)
         self.hybrid_retrieval = HybridRetrievalAgent(self.db, self.rag)
-        
-        # Store pending extraction for confirmation
-        self.pending_extraction = None
-        self.pending_clarifications = []  # Store clarification questions
         
         self.indexed_documents = []
         self.llm_available = self.llm.is_available()
@@ -140,12 +104,12 @@ class GeothermalRAGSystem:
             if not documents:
                 return "❌ Failed to process any documents"
             
-            # Step 1.5: Extract and store tables in database
+            # Step 1.5: Extract and store complete tables in database
             tables_stored = 0
             for doc in documents:
                 if doc['wells']:  # Only process if well names detected
                     try:
-                        stored = self.ingestion.process_and_store_tables(
+                        stored = self.ingestion.process_and_store_complete_tables(
                             doc['filepath'],
                             doc['wells']
                         )
@@ -154,7 +118,7 @@ class GeothermalRAGSystem:
                         logger.warning(f"Table extraction failed for {doc['filename']}: {e}")
             
             if tables_stored > 0:
-                logger.info(f"✓ Stored {tables_stored} table records in database")
+                logger.info(f"✓ Stored {tables_stored} complete tables in database")
             
             # Step 2: Chunking (only narrative text, not tables)
             chunks_dict = self.preprocessing.process(documents)
@@ -177,33 +141,18 @@ class GeothermalRAGSystem:
             
             status += "\nChunking statistics:\n"
             
-            # Show base strategies
-            base_strategies = ['factual_qa', 'technical_extraction', 'summary']
-            for strategy in base_strategies:
-                if strategy in stats:
-                    stat = stats[strategy]
-                    status += f"  • {strategy}: {stat['count']} chunks (avg {stat['avg_words']:.0f} words)\n"
-            
-            # Show hybrid strategies if present
-            hybrid_strategies = ['fine_grained', 'coarse_grained']
-            hybrid_present = any(s in stats for s in hybrid_strategies)
-            
-            if hybrid_present:
-                status += "\n  **Hybrid chunking enabled:**\n"
-                for strategy in hybrid_strategies:
-                    if strategy in stats:
-                        stat = stats[strategy]
-                        status += f"  • {strategy}: {stat['count']} chunks (avg {stat['avg_words']:.0f} words)\n"
+            # Show fine-grained strategy only
+            if 'fine_grained' in stats:
+                stat = stats['fine_grained']
+                status += f"  • fine_grained: {stat['count']} chunks (avg {stat['avg_words']:.0f} words)\n"
             
             status += "\n✓ Ready for queries!"
-            if hybrid_present:
-                status += " (Using multi-granularity hybrid chunking for better retrieval)"
             
             # Add database statistics
             if tables_stored > 0:
-                status += f"\n\n**Hybrid Database System:**\n"
-                status += f"  • {tables_stored} table records stored in SQLite\n"
-                status += f"  • Exact numerical data ready for queries\n"
+                status += f"\n\n**Database System:**\n"
+                status += f"  • {tables_stored} complete tables stored in SQLite\n"
+                status += f"  • All data types preserved (text and numbers)\n"
                 status += f"  • Semantic search available for narrative content\n"
             
             return status
@@ -233,11 +182,11 @@ class GeothermalRAGSystem:
     
     def query(self, user_query: str, mode: str = "Q&A") -> Tuple[str, str]:
         """
-        Process user query with automatic mode detection
+        Process user query
         
         Args:
             user_query: User's question
-            mode: "Q&A", "Summary", or "Extract & Analyze"
+            mode: "Q&A" or "Summary"
             
         Returns:
             Tuple of (response, debug_info)
@@ -256,8 +205,6 @@ class GeothermalRAGSystem:
                 response, debug = self._handle_qa(user_query)
             elif mode == "Summary":
                 response, debug = self._handle_summary(user_query)
-            elif mode == "Extract & Analyze":
-                response, debug = self._handle_extraction(user_query)
             else:
                 response = f"❌ Unknown mode: {mode}"
                 debug = ""
@@ -272,28 +219,19 @@ class GeothermalRAGSystem:
             return f"❌ Error processing query: {str(e)}", str(e)
     
     def _handle_qa(self, query: str) -> Tuple[str, str]:
-        """Handle Q&A queries with LLM-generated answers and fact verification"""
-        # Analyze query
-        query_analysis = self.query_analyzer.analyze(query)
-        logger.info(f"Query type: {query_analysis.query_type}, Priority: {query_analysis.priority}")
-        
-        # Get conversation context for better answers
+        """Handle Q&A queries - always queries both database and semantic search"""
+        # Get conversation context
         context = self.memory.get_context_string(last_n=3)
+        enhanced_query = f"{context}\n\nCurrent question: {query}" if context else query
         
-        # Enhance query with context if available
-        enhanced_query = query
-        if context:
-            enhanced_query = f"{context}\n\nCurrent question: {query}"
-        
-        # Extract well name from query or context
+        # Extract well name
         well_name = self._extract_well_name_from_query(enhanced_query)
         
-        # Mode A: Hybrid Retrieval (SQL for structured data + Vector for narrative)
-        logger.info("⏳ Using hybrid retrieval (Database + Vector Search)...")
+        # ALWAYS use hybrid retrieval (database + semantic)
+        logger.info("⏳ Querying database and semantic search...")
         hybrid_result = self.hybrid_retrieval.retrieve(
             enhanced_query,
             well_name=well_name,
-            mode='auto',  # Auto-detect: database/semantic/hybrid
             top_k=10
         )
         
@@ -301,628 +239,122 @@ class GeothermalRAGSystem:
         combined_text = hybrid_result.get('combined_text', '')
         semantic_results = hybrid_result.get('semantic_results', [])
         database_results = hybrid_result.get('database_results', [])
-        retrieval_mode = hybrid_result.get('mode', 'hybrid')
         
-        logger.info(f"Hybrid retrieval mode: {retrieval_mode}, DB results: {len(database_results)}, Semantic chunks: {len(semantic_results)}")
+        logger.info(f"Retrieved {len(database_results)} tables, {len(semantic_results)} text chunks")
         
-        if not combined_text and not semantic_results:
-            # Check if query is out of scope (not in the 8 data types)
-            if retrieval_mode == 'database' and not database_results:
-                return "⚠️ No data found. The question may be outside the scope of the 8 supported data types:\n" \
-                       "1. General Data\n2. Timeline\n3. Depths\n4. Casing\n5. Cementing\n6. Fluids\n7. Geology\n8. Incidents", ""
-            return "⚠️ No relevant information found in documents", ""
+        if not combined_text:
+            return "⚠️ No relevant information found", ""
         
-        # Use semantic chunks for confidence scoring
-        chunks = semantic_results if semantic_results else []
-        
-        # Calculate source quality
-        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=5)
-        
-        # Generate answer using LLM if available
+        # Generate answer with LLM if available
         if self.llm_available:
             try:
                 logger.info("⏳ Generating answer with LLM...")
-                # Use combined context from hybrid retrieval (database + semantic)
-                if combined_text:
-                    # Create a single "chunk" with combined context for LLM
-                    combined_chunk = [{
-                        'text': combined_text,
-                        'metadata': {
-                            'source': 'hybrid_retrieval',
-                            'mode': retrieval_mode,
-                            'db_results': len(database_results),
-                            'semantic_results': len(semantic_results)
-                        }
-                    }]
-                    answer = self.llm.generate_answer(query, combined_chunk)
-                else:
-                    answer = self.llm.generate_answer(query, chunks)
+                # Use combined context from hybrid retrieval
+                combined_chunk = [{'text': combined_text}]
+                answer = self.llm.generate_answer(query, combined_chunk)
                 
-                # Fact verification
-                logger.info("⏳ Verifying facts...")
-                verification = self.fact_verifier.verify(answer, chunks)
-                
-                # Calculate confidence
-                confidence = self.confidence_scorer.calculate_confidence(
-                    source_quality=source_quality,
-                    fact_verification=verification.overall_confidence,
-                    consistency=0.85,  # Default - no extraction to check
-                    context={'query_type': 'qa'}
-                )
-                
-                # Build response with warnings
-                response_parts = []
-                
-                # Add confidence header
-                if confidence.recommendation == 'high':
-                    response_parts.append("✅ **HIGH CONFIDENCE ANSWER**\n")
-                elif confidence.recommendation == 'review':
-                    response_parts.append("⚠️ **REVIEW RECOMMENDED** - Verify before critical use\n")
-                else:
-                    response_parts.append("⚠️ **LOW CONFIDENCE** - Results may be unreliable\n")
-                
-                response_parts.append(answer)
-                
-                # Add verification warnings
-                if verification.warnings:
-                    response_parts.append("\n\n**⚠️ Verification Warnings:**")
-                    for warning in verification.warnings:
-                        response_parts.append(f"- {warning}")
-                
-                # Add sources
-                sources = "\n\n**Sources:**\n"
-                seen_sources = set()
-                for i, chunk in enumerate(chunks[:5], 1):
-                    source = chunk['metadata'].get('source_file', 'unknown')
-                    pages = chunk['metadata'].get('page_numbers', ['?'])
-                    page_str = ', '.join(map(str, pages[:3]))
-                    source_key = f"{source}-{page_str}"
-                    
-                    if source_key not in seen_sources:
-                        sources += f"- {source}, pages {page_str}\n"
-                        seen_sources.add(source_key)
-                
-                response_parts.append(sources)
-                
-                # Add confidence breakdown
-                response_parts.append(f"\n**Confidence Assessment:**\n{confidence.explanation}")
-                
-                response_text = "\n".join(response_parts)
-                
-                # Debug info
-                debug_info = f"Retrieved {len(chunks)} chunks\n"
+                debug_info = f"Retrieved {len(database_results)} tables, {len(semantic_results)} chunks\n"
                 debug_info += f"Generated answer using LLM ({self.llm.model_qa})\n"
-                debug_info += f"Fact verification: {verification.support_rate*100:.0f}% claims supported\n"
-                debug_info += f"Overall confidence: {confidence.overall*100:.0f}%\n"
-                debug_info += f"Recommendation: {confidence.recommendation.upper()}\n"
                 
-                return response_text, debug_info
+                return answer, debug_info
                 
             except Exception as e:
                 logger.error(f"LLM answer generation failed: {str(e)}")
-                # Fall through to fallback mode
+                return f"Error generating answer: {str(e)}", str(e)
         
-        # Fallback: return excerpts from chunks
-        response_parts = []
-        response_parts.append(f"Based on the indexed documents:\n")
-        
-        for i, chunk in enumerate(chunks[:4], 1):
-            response_parts.append(f"\n**Excerpt {i}** (from {chunk['metadata'].get('source_file', 'unknown')}," 
-                                f" page {chunk['metadata'].get('page_numbers', ['?'])[0]}):")
-            
-            excerpt = chunk['text'][:400].strip()
-            if len(chunk['text']) > 400:
-                excerpt += "..."
-            response_parts.append(f"{excerpt}\n")
-        
-        response_text = "\n".join(response_parts)
-        quality = self.judge.evaluate_response(query, response_text, chunks)
-        
-        debug_info = f"Retrieved {len(chunks)} chunks (fallback mode - no LLM)\n"
-        debug_info += f"Quality score: {quality['quality_score']:.2f}\n"
-        
-        return response_text, debug_info
+        # Fallback: return raw context
+        debug_info = f"Retrieved {len(database_results)} tables, {len(semantic_results)} chunks (LLM not available)\n"
+        return combined_text[:2000], debug_info
     
     def _handle_summary(self, query: str) -> Tuple[str, str]:
         """
-        Handle document summarization (Mode B)
-        Uses all 8 data types from database and vector store
-        """
-        # Analyze query to check if user wants detailed End of Well Summary
-        query_analysis = self.query_analyzer.analyze(query)
-        query_lower = query.lower()
+        Generate summary by retrieving 8 data types from database and chunks
         
-        # Extract well name from query
+        8 Data Types:
+        1. General Data: Well Name, License, Well Type, Location, Coordinates, Operator, Rig, Target Formation
+        2. Drilling Timeline: Spud Date, End of Operations, Total Days
+        3. Depths: TD (mAH), TVD, Sidetrack Start Depth
+        4. Casing & Tubulars: Type, OD, Weight, Grade, Connection, Pipe ID (Nominal + Drift), Top/Bottom Depths
+        5. Cementing: Lead/Tail volumes, Densities, TOC
+        6. Fluids: Hole Size, Fluid Type, Density Range
+        7. Geology/Formations: Formation names, depths, lithology, notes
+        8. Incidents: Gas peaks, stuck pipe, mud losses
+        """
         well_name = self._extract_well_name_from_query(query)
         
         if not well_name:
-            return "⚠️ Please specify a well name for summary generation", ""
+            return "⚠️ Please specify a well name for summary", ""
         
-        logger.info(f"📝 Generating Mode B summary for well: {well_name}")
+        logger.info(f"📝 Generating summary for {well_name}")
         
-        try:
-            # Get narrative context from vector store (for geology/narrative details)
-            logger.info("⏳ Fetching narrative context from vector store...")
-            narrative_query = f"geology formations incidents problems {well_name}"
-            retrieval_result = self.rag.retrieve(narrative_query, top_k=5)
-            
-            narrative_context = ""
-            if isinstance(retrieval_result, dict):
-                semantic_results = retrieval_result.get('chunks', [])
-            else:
-                semantic_results = retrieval_result
-            
-            if semantic_results:
-                narrative_texts = [chunk.get('text', '') if isinstance(chunk, dict) else str(chunk) 
-                                 for chunk in semantic_results[:3]]
-                narrative_context = "\n\n".join(narrative_texts)
-            
-            # Generate summary using all 8 data types from database
-            logger.info("⏳ Generating comprehensive summary using database + narrative...")
-            summary_result = self.well_summary_agent.generate_summary(
-                well_name=well_name,
-                narrative_context=narrative_context
-            )
-            
-            # Build response
-            response_parts = []
-            
-            # Add confidence header
-            confidence = summary_result['confidence']
-            if confidence >= 0.8:
-                response_parts.append("✅ **HIGH CONFIDENCE END OF WELL SUMMARY**\n")
-            elif confidence >= 0.6:
-                response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
-            else:
-                response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY DATA**\n")
-            
-            # Add the summary report
-            response_parts.append(summary_result['summary_report'])
-            
-            # Add data sources info
-            well_data = summary_result.get('well_data', {})
-            data_types_present = []
-            if well_data.get('well_info'): data_types_present.append("General Data")
-            if well_data.get('casing_strings'): data_types_present.append("Casing")
-            if well_data.get('cementing'): data_types_present.append("Cementing")
-            if well_data.get('drilling_fluids'): data_types_present.append("Fluids")
-            if well_data.get('formations'): data_types_present.append("Geology")
-            if well_data.get('incidents'): data_types_present.append("Incidents")
-            
-            response_parts.append(f"\n\n**Data Sources:** {', '.join(data_types_present)}")
-            response_parts.append(f"**Confidence Score:** {confidence*100:.0f}%")
-            response_parts.append("\n*Generated using Mode B: All 8 data types from database + narrative context*")
-            
-            summary_text = "\n".join(response_parts)
-            
-            # Debug info
-            debug_info = f"Mode B Summary System\n"
-            debug_info += f"Well: {well_name}\n"
-            debug_info += f"Data types used: {len(data_types_present)}/8\n"
-            debug_info += f"Casing strings: {len(well_data.get('casing_strings', []))}\n"
-            debug_info += f"Formations: {len(well_data.get('formations', []))}\n"
-            debug_info += f"Incidents: {len(well_data.get('incidents', []))}\n"
-            debug_info += f"Narrative chunks: {len(semantic_results)}\n"
-            debug_info += f"Confidence: {confidence*100:.0f}%\n"
-            
-            return summary_text, debug_info
-                
-        except Exception as e:
-            logger.error(f"Mode B summary generation failed: {str(e)}")
-            logger.exception(e)
-            return f"❌ Summary generation failed: {str(e)}", str(e)
-        
-        # Standard summary approach (original code)
-        logger.info("📝 Generating standard summary...")
-        
-        # Extract target word count (use analysis result or default)
-        target_words = query_analysis.target_word_count
-        if target_words is None:
-            target_words = self.config.get('summarization', {}).get('default_words', 200)
-        
-        # Handle null default (no limit) - use 0 as signal for comprehensive mode
-        if target_words is None:
-            target_words = 0
-            logger.info(f"Target: No word limit (comprehensive summary)")
-        else:
-            logger.info(f"Target: {target_words} words")
-            # Ensure reasonable range only if a limit is specified
-            target_words = max(50, min(target_words, 1000))
-        
-        # Extract focus area from query analysis
-        focus = ', '.join(query_analysis.detected_focus) if query_analysis.detected_focus else None
-        
-        # Extract well name for hybrid retrieval
-        well_name = self._extract_well_name_from_query(query)
-        
-        # Use hybrid retrieval if well name is known
-        if well_name:
-            logger.info(f"Using hybrid retrieval for well: {well_name}")
-            hybrid_result = self.hybrid_retrieval.retrieve(
-                query=query,
-                well_name=well_name,
-                mode='hybrid',  # Use both database and semantic search
-                top_k=15
-            )
-            
-            # Extract chunks from hybrid result
-            chunks = hybrid_result.get('semantic_results', [])
-            
-            # Add database info as context
-            db_context = []
-            for db_result in hybrid_result.get('database_results', []):
-                db_context.append({
-                    'text': db_result.get('text', ''),
-                    'metadata': {
-                        'source_file': 'Database',
-                        'type': db_result.get('type', 'unknown')
-                    }
-                })
-            
-            # Combine database context with semantic chunks (database first for priority)
-            chunks = db_context + chunks
-            logger.info(f"Hybrid retrieval: {len(db_context)} DB results + {len(chunks)-len(db_context)} semantic chunks")
-        else:
-            # Fallback to traditional retrieval if no well name
-            logger.info("No well name detected, using traditional semantic retrieval")
-            retrieval_result = self.rag.retrieve_hybrid_granularity(query, mode='summary')
-            chunks = retrieval_result['chunks']
-            logger.info(f"Retrieved {len(chunks)} chunks using hybrid granularity strategy")
-        
-        if not chunks:
-            return "⚠️ No content found for summarization", ""
-        
-        # Calculate source quality
-        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=10)
-        
-        # Generate summary using LLM if available
-        if self.llm_available:
-            try:
-                logger.info("⏳ Generating summary with citations and strict word count enforcement...")
-                summary = self.llm.generate_summary(chunks, target_words, focus)
-                
-                # Count actual words
-                actual_words = len(summary.split())
-                logger.info(f"✓ Generated {actual_words} words (target: {target_words})")
-                
-                # Perform fact verification if enabled and enough chunks
-                summary_config = self.config.get('summarization', {})
-                enable_verification = summary_config.get('enable_verification', True)
-                min_chunks = summary_config.get('min_chunks_for_verification', 5)
-                
-                fact_verification_score = 1.0  # Default to perfect if not verified
-                if enable_verification and len(chunks) >= min_chunks:
-                    logger.info("⏳ Performing fact verification on summary...")
-                    try:
-                        # Fixed: Use verify() method not verify_facts()
-                        verification_result = self.fact_verifier.verify(summary, chunks)
-                        fact_verification_score = verification_result.overall_confidence
-                        logger.info(f"✓ Fact verification complete: {fact_verification_score*100:.0f}% ({verification_result.support_rate*100:.0f}% supported)")
-                    except Exception as e:
-                        logger.warning(f"Fact verification failed: {e}")
-                        import traceback
-                        traceback.print_exc()
-                        fact_verification_score = 0.5  # Assume moderate confidence
-                else:
-                    logger.info("Skipping fact verification (not enabled or insufficient chunks)")
-                
-                # Calculate confidence with verification
-                confidence = self.confidence_scorer.calculate_confidence(
-                    source_quality=source_quality,
-                    fact_verification=fact_verification_score,
-                    completeness=0.9,  # High for summaries
-                    consistency=0.85,
-                    context={'query_type': 'summary', 'word_count': actual_words}
-                )
-                
-                # Build response with metadata
-                response_parts = []
-                
-                # Add confidence header
-                if confidence.recommendation == 'high':
-                    response_parts.append("✅ **HIGH CONFIDENCE SUMMARY**\n")
-                elif confidence.recommendation == 'review':
-                    response_parts.append("⚠️ **REVIEW RECOMMENDED**\n")
-                else:
-                    response_parts.append("⚠️ **LOW CONFIDENCE**\n")
-                
-                response_parts.append(summary)
-                
-                # Add warnings if any
-                if confidence.warnings:
-                    response_parts.append("\n\n**⚠️ Warnings:**")
-                    for warning in confidence.warnings:
-                        response_parts.append(f"- {warning}")
-                
-                # Add metadata
-                sources = set(chunk['metadata'].get('source_file', 'unknown') for chunk in chunks[:10])
-                metadata = f"\n\n---\n*Summary of {', '.join(sources)} ({len(chunks)} sections, {actual_words} words)*"
-                response_parts.append(metadata)
-                
-                # Add confidence breakdown
-                response_parts.append(f"\n**Confidence Assessment:**\n{confidence.explanation}")
-                
-                summary_text = "\n".join(response_parts)
-                
-                # Debug info
-                debug_info = f"Summarized from {len(chunks)} chunks\n"
-                debug_info += f"Target words: {target_words}, Actual: {actual_words}\n"
-                debug_info += f"Focus: {focus or 'general'}\n"
-                debug_info += f"Generated using LLM ({self.llm.model_summary})\n"
-                debug_info += f"Confidence: {confidence.overall*100:.0f}%\n"
-                
-                return summary_text, debug_info
-                
-            except Exception as e:
-                logger.error(f"LLM summary generation failed: {str(e)}")
-                # Fall through to fallback mode
-        
-        # Fallback: return bullet points from chunks
         summary_parts = []
-        summary_parts.append(f"**Summary** (from {len(chunks)} sections):\n")
+        summary_parts.append(f"# Well Summary: {well_name}\n")
         
-        word_count = 0
-        for chunk in chunks[:12]:
-            # Take sentences until we reach target word count
-            sentences = chunk['text'].split('. ')
-            for sentence in sentences:
-                if word_count + len(sentence.split()) > target_words:
-                    break
-                summary_parts.append(f"• {sentence.strip()}.")
-                word_count += len(sentence.split())
-            
-            if word_count >= target_words:
-                break
+        # 1. Get ALL complete tables from DATABASE
+        tables = self.db.get_complete_tables(well_name)
+        logger.info(f"Retrieved {len(tables)} tables from database")
         
-        summary_text = "\n".join(summary_parts)
-        summary_text += f"\n\n---\n*Fallback summary (~{word_count} words, Ollama not available)*"
+        # Organize tables by type/content
+        for table in tables:
+            table_text = self._format_table_markdown(table)
+            summary_parts.append(table_text)
         
-        debug_info = f"Summarized from {len(chunks)} chunks (fallback mode)\n"
-        debug_info += f"Target words: {target_words}\n"
+        # 2. Get narrative data from SEMANTIC SEARCH
+        searches = [
+            (f"{well_name} general data operator rig location", "## General Information"),
+            (f"{well_name} spud date completion timeline", "## Timeline"),
+            (f"{well_name} total depth TD TVD", "## Depths"),
+            (f"{well_name} geology formations lithology", "## Geology"),
+            (f"{well_name} incidents problems stuck pipe gas", "## Incidents")
+        ]
         
-        return summary_text, debug_info
+        for search_query, section_title in searches:
+            chunks = self.rag.retrieve(search_query, top_k=3)
+            if chunks:
+                summary_parts.append(f"\n{section_title}\n")
+                combined_text = "\n\n".join([c['text'][:300] for c in chunks])
+                
+                if self.llm_available:
+                    # Use LLM to summarize
+                    try:
+                        section_summary = self.llm.generate_answer(
+                            f"Summarize {section_title} for {well_name} in 2-3 sentences",
+                            [{'text': combined_text}]
+                        )
+                        summary_parts.append(section_summary)
+                    except:
+                        summary_parts.append(combined_text[:500])
+                else:
+                    summary_parts.append(combined_text[:500])
+        
+        final_summary = "\n\n".join(summary_parts)
+        debug_info = f"Generated from {len(tables)} tables and semantic search"
+        
+        return final_summary, debug_info
     
-    def _handle_extraction(self, query: str) -> Tuple[str, str]:
-        """Handle parameter extraction with comprehensive validation and clarification"""
-        # Extract well name from query
-        well_name = self._extract_well_name(query)
+    def _format_table_markdown(self, table: Dict) -> str:
+        """Convert table to markdown format"""
+        md = f"\n### {table.get('table_reference', 'Table')} (Page {table['source_page']})\n\n"
         
-        # Check cache first
-        cached = self.memory.get_cached_extraction(well_name) if well_name else None
+        # Parse JSON strings
+        import json
+        headers = json.loads(table.get('headers_json', '[]'))
+        rows = json.loads(table.get('rows_json', '[]'))
         
-        if not cached:
-            # Two-phase retrieval with increased chunks for better data extraction
-            logger.info("Performing two-phase retrieval with high chunk counts...")
-            
-            query1 = f"trajectory survey directional {well_name or ''}"
-            query2 = f"casing design well schematic pipe ID {well_name or ''}"
-            
-            retrieval_result = self.rag.retrieve_two_phase(
-                query1, query2,
-                mode1='extract', mode2='summary',
-                top_k1=40,  # Increased from 15 for better trajectory coverage
-                top_k2=30,  # Increased from 10 for better casing data
-                well_name=well_name
-            )
-            
-            chunks = retrieval_result['chunks']
-            
-            if not chunks:
-                return "⚠️ No trajectory or casing data found", ""
-            
-            # Extract parameters
-            logger.info("Extracting parameters...")
-            extraction_log = []
-            extracted_data = self.extraction.extract(chunks, well_name, extraction_log)
-            
-            # Cache results
-            if well_name:
-                self.memory.cache_extraction(well_name, extracted_data)
-        else:
-            extracted_data = cached
-            extraction_log = cached.get('extraction_log', [])
+        # Headers
+        if headers:
+            md += "| " + " | ".join(str(h) for h in headers) + " |\n"
+            md += "| " + " | ".join(["---"] * len(headers)) + " |\n"
         
-        # Step 1: Basic validation
-        logger.info("⏳ Validating extracted data...")
-        validation_result = self.validation.validate(extracted_data)
+        # Rows (limit to 20 rows)
+        for row in rows[:20]:
+            md += "| " + " | ".join(str(cell) for cell in row) + " |\n"
         
-        # Step 2: Physical validation
-        logger.info("⏳ Running physical validation...")
-        trajectory_data = []
-        for point in extracted_data.get('trajectory', []):
-            trajectory_data.append({
-                'MD': point.get('md', 0),
-                'TVD': point.get('tvd', 0),
-                'ID': point.get('pipe_id', 0)  # Already in inches
-            })
+        if len(rows) > 20:
+            md += f"\n*({len(rows) - 20} more rows...)*\n"
         
-        physical_validation = self.physical_validator.validate_trajectory(trajectory_data)
-        
-        # Step 3: Completeness assessment
-        logger.info("⏳ Assessing data completeness...")
-        completeness = self.missing_data_agent.assess_completeness(extracted_data)
-        
-        # Step 4: Calculate confidence
-        source_quality = self.confidence_scorer.calculate_source_quality(chunks, top_k=10)
-        consistency = self.confidence_scorer.calculate_consistency(extracted_data)
-        
-        confidence = self.confidence_scorer.calculate_confidence(
-            source_quality=source_quality,
-            completeness=completeness.completeness_score,
-            consistency=consistency,
-            physical_validity=physical_validation.confidence,
-            context={'query_type': 'extraction'}
-        )
-        
-        # Apply defaults if needed
-        if validation_result['suggestions'] and not validation_result['critical_errors']:
-            extracted_data = self.validation.apply_defaults(extracted_data, validation_result['suggestions'])
-        
-        # Store for potential nodal analysis
-        self.pending_extraction = extracted_data
-        self.pending_clarifications = completeness.clarification_questions
-        
-        # Build comprehensive response
-        response_parts = []
-        response_parts.append(f"# Extraction Results for {extracted_data.get('well_name', 'Unknown Well')}\n")
-        
-        # Confidence header
-        if confidence.recommendation == 'high':
-            response_parts.append("✅ **HIGH CONFIDENCE EXTRACTION**\n")
-        elif confidence.recommendation == 'review':
-            response_parts.append("⚠️ **REVIEW REQUIRED BEFORE USE**\n")
-        else:
-            response_parts.append("⚠️ **LOW CONFIDENCE - VERIFY ALL DATA**\n")
-        
-        # Trajectory summary
-        trajectory = extracted_data.get('trajectory', [])
-        if trajectory:
-            response_parts.append(f"\n## Trajectory Data")
-            response_parts.append(f"Points extracted: {len(trajectory)}")
-            response_parts.append(f"Depth range: {trajectory[0]['md']:.1f} - {trajectory[-1]['md']:.1f} m MD")
-            response_parts.append(f"\nFirst 5 points:")
-            for i, point in enumerate(trajectory[:5], 1):
-                response_parts.append(
-                    f"  {i}. MD: {point['md']:.1f}m, TVD: {point['tvd']:.1f}m, "
-                    f"Inc: {point['inclination']:.1f}°, ID: {point['pipe_id']:.2f}\""
-                )
-            
-            if len(trajectory) > 5:
-                response_parts.append(f"  ... ({len(trajectory) - 5} more points)")
-            
-            # Show full trajectory format for approval
-            response_parts.append(f"\n### Complete Trajectory Data (for nodal analysis):")
-            preview_code = self.nodal_runner.generate_preview_code(extracted_data)
-            response_parts.append(f"```python\n{preview_code}\n```")
-        
-        # PVT data
-        pvt = extracted_data.get('pvt_data', {})
-        if pvt:
-            response_parts.append(f"\n## Fluid Properties")
-            if 'density' in pvt:
-                response_parts.append(f"  • Density: {pvt['density']:.0f} kg/m³")
-            if 'viscosity' in pvt:
-                response_parts.append(f"  • Viscosity: {pvt['viscosity']:.4f} Pa·s")
-            if 'temp_gradient' in pvt:
-                response_parts.append(f"  • Temperature gradient: {pvt['temp_gradient']:.1f} °C/km")
-        
-        # Physical validation results
-        response_parts.append(f"\n## Physical Validation")
-        if physical_validation.is_valid:
-            response_parts.append("✓ All physical constraints satisfied")
-        else:
-            response_parts.append(f"✗ Physical violations detected:")
-            for violation in physical_validation.violations[:5]:  # Show top 5
-                response_parts.append(f"  • [{violation.severity.upper()}] {violation.description}")
-                response_parts.append(f"    → {violation.suggestion}")
-        
-        # Completeness assessment
-        response_parts.append(f"\n## Data Completeness")
-        response_parts.append(completeness.summary)
-        
-        # Show clarification questions if needed
-        if completeness.clarification_questions:
-            response_parts.append(f"\n### ⚠️ Clarification Needed:")
-            for i, question in enumerate(completeness.clarification_questions[:5], 1):
-                response_parts.append(f"  {i}. {question}")
-        
-        # Legacy validation report
-        response_parts.append(f"\n## Legacy Validation")
-        if validation_result['valid']:
-            response_parts.append("✓ All validations passed")
-        else:
-            response_parts.append("✗ Validation failed:")
-            for error in validation_result['critical_errors']:
-                response_parts.append(f"  {error}")
-        
-        if validation_result['warnings']:
-            response_parts.append("\nWarnings:")
-            for warning in validation_result['warnings']:
-                response_parts.append(f"  {warning}")
-        
-        # Confidence breakdown
-        response_parts.append(f"\n## Confidence Assessment")
-        response_parts.append(confidence.explanation)
-        
-        if confidence.warnings:
-            response_parts.append(f"\n**⚠️ Overall Warnings:**")
-            for warning in confidence.warnings:
-                response_parts.append(f"- {warning}")
-        
-        # Next steps - ALWAYS ask for confirmation
-        response_parts.append(f"\n---")
-        if physical_validation.is_valid and not completeness.has_critical_gaps:
-            response_parts.append(f"\n**✓ Data extraction complete with {confidence.overall*100:.0f}% confidence**")
-            response_parts.append(f"\n⚠️ **IMPORTANT:** Review the extracted data above carefully.")
-            if completeness.clarification_questions:
-                response_parts.append(f"⚠️ **Consider answering the clarification questions** for better results.")
-            response_parts.append(f"\nIf the data looks correct, click **'Run Nodal Analysis'** below to proceed.")
-        else:
-            response_parts.append(f"\n**⚠️ Data has critical issues - address before analysis:**")
-            if not physical_validation.is_valid:
-                response_parts.append(f"  • Physical constraint violations detected")
-            if completeness.has_critical_gaps:
-                response_parts.append(f"  • Critical data missing")
-            response_parts.append(f"\nReview issues above and verify source documents.")
-        
-        # Debug info
-        debug_info = "Extraction Log:\n"
-        debug_info += "\n".join(extraction_log[-20:])  # Last 20 log messages
-        
-        return "\n".join(response_parts), debug_info
-    
-    def run_nodal_analysis(self) -> Tuple[str, str]:
-        """Run nodal analysis with previously extracted data"""
-        if not self.pending_extraction:
-            return "⚠️ No extraction data available. Please run 'Extract & Analyze' mode first.", ""
-        
-        extracted_data = self.pending_extraction
-        trajectory = extracted_data.get('trajectory', [])
-        pvt = extracted_data.get('pvt_data', {})
-        
-        if not trajectory:
-            return "⚠️ No trajectory data found in extraction results", ""
-        
-        logger.info(f"Running nodal analysis with {len(trajectory)} trajectory points...")
-        
-        response_parts = []
-        response_parts.append(f"# Nodal Analysis Results\n")
-        response_parts.append(f"Well: {extracted_data.get('well_name', 'Unknown')}\n")
-        
-        try:
-            success, output, plot_path = self.nodal_runner.run_with_extracted_data(extracted_data)
-            
-            if success:
-                response_parts.append(f"\n**✓ Nodal Analysis Completed Successfully**\n")
-                response_parts.append(f"```\n{output}\n```")
-                
-                # Parse key results from output
-                import re
-                flowrate_match = re.search(r'Flowrate:\s*([\d.]+)\s*m3/hr', output)
-                bhp_match = re.search(r'Bottomhole pressure:\s*([\d.]+)\s*bar', output)
-                pump_head_match = re.search(r'Pump head:\s*([\d.]+)\s*m', output)
-                
-                if flowrate_match and bhp_match and pump_head_match:
-                    response_parts.append(f"\n## Key Results:")
-                    response_parts.append(f"- **Flow Rate:** {flowrate_match.group(1)} m³/hr")
-                    response_parts.append(f"- **Bottomhole Pressure:** {bhp_match.group(1)} bar")
-                    response_parts.append(f"- **Pump Head:** {pump_head_match.group(1)} m")
-                
-                response_parts.append(f"\n✓ Analysis complete. Check console output for full results.")
-            else:
-                response_parts.append(f"\n**⚠️ Nodal Analysis Error:**")
-                response_parts.append(f"```\n{output}\n```")
-                response_parts.append(f"\nThe nodal analysis script encountered an error. Please check the error message above.")
-                
-        except Exception as e:
-            response_parts.append(f"\n⚠️ Nodal analysis execution error: {str(e)}")
-            logger.error(f"Nodal analysis failed: {str(e)}", exc_info=True)
-        
-        debug_info = f"Trajectory points: {len(trajectory)}\n"
-        debug_info += f"Depth range: {trajectory[0]['md']:.1f} - {trajectory[-1]['md']:.1f} m\n"
-        debug_info += f"Fluid density: {pvt.get('density', 1000.0)} kg/m³\n"
-        
-        return "\n".join(response_parts), debug_info
+        return md
+
     
     def _extract_well_name(self, query: str) -> Optional[str]:
         """Extract well name from query"""
@@ -996,7 +428,7 @@ def create_ui():
             with gr.Row():
                 with gr.Column(scale=2):
                     query_mode = gr.Radio(
-                        choices=["Q&A", "Summary", "Extract & Analyze"],
+                        choices=["Q&A", "Summary"],
                         value="Q&A",
                         label="Query Mode"
                     )
@@ -1006,32 +438,28 @@ def create_ui():
                         lines=3
                     )
                     
-                    with gr.Row():
-                        query_btn = gr.Button("Submit Query", variant="primary")
-                        nodal_btn = gr.Button("Run Nodal Analysis", variant="secondary")
+                    query_btn = gr.Button("Submit Query", variant="primary")
                     
                     gr.Markdown("""
                     **Query Mode Guide:**
                     - **Q&A**: Ask specific questions about the documents (with conversation memory)
-                    - **Summary**: Get a summary of document contents
-                    - **Extract & Analyze**: Extract trajectory/casing data for review
+                    - **Summary**: Get a comprehensive summary with data from database tables and document text
                     
                     **Example queries:**
                     - Q&A: "What is the casing design for [WELL-NAME]?"
-                    - Summary: "Summarize the completion report in 300 words"
-                    - Summary (Detailed): "Generate detailed End of Well Summary" or "Professional completion report summary"
-                    - Extract: "Extract trajectory data for [WELL-NAME]"
+                    - Q&A: "What was the drilling fluid density?"
+                    - Summary: "Summarize well [WELL-NAME]"
+                    - Summary: "Generate summary for [WELL-NAME]"
                     
-                    **✨ NEW: 3-Pass End of Well Summary**
-                    Use keywords like "End of Well", "EOW", "detailed", "professional", or "completion report" to activate:
-                    - **Pass 1**: Metadata (Operator, Well, Rig, Dates, Days Total)
-                    - **Pass 2**: Technical Specs (Casing/Tubing tables with ID column)
-                    - **Pass 3**: Narrative (Geology, hazards, instabilities)
-                    
-                    **Workflow for Nodal Analysis:**
-                    1. Use "Extract & Analyze" mode to extract trajectory data
-                    2. Review the displayed trajectory format
-                    3. Click "Run Nodal Analysis" to execute the analysis with extracted data
+                    **Summary includes 8 data types:**
+                    1. General Data (Operator, Location, Rig)
+                    2. Timeline (Spud, Completion, Total Days)
+                    3. Depths (TD, TVD)
+                    4. Casing & Tubulars (all tables)
+                    5. Cementing
+                    6. Fluids
+                    7. Geology/Formations
+                    8. Incidents
                     """)
                     
                     # Conversation history
@@ -1070,12 +498,6 @@ def create_ui():
                 inputs=[query_input, query_mode],
                 outputs=[response_output, debug_output, history_display]
             )
-            
-            nodal_btn.click(
-                fn=system.run_nodal_analysis,
-                inputs=[],
-                outputs=[response_output, debug_output]
-            )
         
         with gr.Tab("ℹ️ About"):
             gr.Markdown("""
@@ -1084,47 +506,39 @@ def create_ui():
             This system provides intelligent analysis of geothermal well completion reports using:
             
             ### Features
-            - **✨ NEW: 3-Pass End of Well Summary**: Professional drilling reports with metadata, casing tables (with ID), and narrative
-            - **Multi-strategy chunking**: Optimized for Q&A, summarization, and data extraction
-            - **Two-phase retrieval**: Separate queries for trajectory and casing data
-            - **Regex-first extraction**: Fast, reliable table parsing with LLM fallback
-            - **Data validation**: Physics-based checks for MD≥TVD, realistic pipe sizes, etc.
-            - **Nodal analysis**: Production capacity estimation from extracted parameters
-            - **Conversation memory**: Multi-turn interactions with context
+            - **Hybrid Retrieval**: Always searches both database tables AND document text
+            - **Complete Table Storage**: Stores entire tables with all columns in SQLite database
+            - **Fine-Grained Chunking**: Optimized 500-word chunks with 150-word overlap
+            - **8-Data-Type Summary**: Comprehensive summaries covering all aspects of well data
+            - **Conversation Memory**: Multi-turn Q&A with context retention
+            - **LLM-Powered Answers**: Uses Ollama for natural language generation
             
-            ### 3-Pass Summary System
-            **Pass 1 - Metadata (Key-Value):**
-            - Scans first 3 pages
-            - Extracts: Operator, Well Name, Rig Name, Dates (Spud/End)
-            - Computes Days_Total
-            
-            **Pass 2 - Technical Specs (Table-to-Markdown):**
-            - Uses pdfplumber to extract Casing/Tubing/Liner tables
-            - Converts to Markdown format
-            - Extracts pipe_id (Inner Diameter) from ID columns
-            
-            **Pass 3 - Narrative (Section-Restricted):**
-            - Locates Geology/Lithology sections
-            - Extracts formation instabilities, gas peaks, drilling hazards
+            ### Summary System (8 Data Types)
+            When you request a summary, the system retrieves:
+            1. **General Data**: Well name, operator, location, rig
+            2. **Timeline**: Spud date, end date, total days
+            3. **Depths**: Total depth, TVD, sidetrack depths
+            4. **Casing & Tubulars**: Complete tables with all specifications
+            5. **Cementing**: Volumes, densities, TOC
+            6. **Fluids**: Hole sizes, fluid types, densities
+            7. **Geology**: Formation names, depths, lithology
+            8. **Incidents**: Gas peaks, stuck pipe, losses
             
             ### Architecture
-            - **Vector DB**: ChromaDB (embedded)
+            - **Vector DB**: ChromaDB (single collection)
+            - **Relational DB**: SQLite (complete tables)
             - **Embeddings**: nomic-embed-text (384 dims)
             - **LLM**: Ollama (llama3/llama3.1)
-            - **PDF Processing**: PyMuPDF + pdfplumber (tables)
+            - **PDF Processing**: PyMuPDF + pdfplumber
+            - **Chunking**: Fine-grained only (500 words, 150 overlap)
             
             ### Usage Tips
             1. Upload PDF completion reports in the "Document Upload" tab
-            2. Wait for indexing to complete (20-40 seconds for typical reports)
-            3. Switch to "Query Interface" and select appropriate mode
-            4. For extraction, include well name in your query (e.g., "[WELL-NAME]")
-            5. For detailed summaries, use keywords: "End of Well", "EOW", "detailed", or "professional"
-            
-            ### Validation Rules
-            - MD ≥ TVD (±1m tolerance)
-            - Pipe ID: 2-30 inches
-            - Inclination: 0-90°
-            - Well depth: 500-5000m (typical geothermal range)
+            2. Wait for indexing to complete (typically 20-40 seconds)
+            3. Switch to "Query Interface"
+            4. For Q&A: Ask specific questions about well data
+            5. For Summary: Include well name (e.g., "Summarize well [WELL-NAME]")
+            6. System always searches both database and document text for best results
             
             Developed with ❤️ for geothermal engineering
             """)

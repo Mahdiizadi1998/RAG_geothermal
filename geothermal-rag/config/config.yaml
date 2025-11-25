@@ -26,50 +26,16 @@ vector_db:
   distance_metric: cosine
   
 chunking:
-  # HYBRID PARSING STRATEGY: Tables vs Narrative Text
-  # WHY: Tables need different treatment than narrative text to preserve row context
+  # Single strategy chunking for narrative text only
+  # Tables are stored complete in database, not chunked
   
-  # Stream A: Tables (pdfplumber extraction)
-  # Tables are NOT chunked - each table row becomes a semantic summary for embedding
-  # Example: "Casing Table: 13 3/8 inch casing set at 1331m MD"
-  # Raw table data (JSON/Dict) stored in metadata for exact LLM retrieval
-  tables:
-    extract_method: "pdfplumber"      # Best for detecting tables in Well Reports
-    vertical_strategy: "text"         # Handle invisible grid lines (common in these PDFs)
-    store_raw: true                   # Keep original JSON/Dict in metadata
-    summarize_rows: true              # Convert each row to searchable text
-    min_words_in_row: 3              # Skip header-only or empty rows
-    
-  # Stream B: Narrative Text (semantic splitting by section headers)
-  # WHY: Use RecursiveCharacterTextSplitter for natural breaks
-  factual_qa:
-    chunk_size: 800      # ~800 tokens for focused Q&A context
-    chunk_overlap: 100   # Minimal overlap, enough for continuity
-    method: "recursive"  # RecursiveCharacterTextSplitter
-    clean_headers: true  # Remove "Page X of Y", "SodM EOWR" footers
-    
-  technical_extraction:
-    chunk_size: 2000     # Technical sections (casing, cementing, fluids)
-    chunk_overlap: 400   # 20% overlap maintains technical context
-    method: "semantic"   # Split by section headers
-    preserve_sections: true  # Keep "4. GEOLOGY" blocks together
-    
-  summary:
-    chunk_size: 1500     # Section-level summaries
-    chunk_overlap: 200   # Light overlap
-    method: "semantic"   # Split by major headers ("1. GENERAL DATA")
-    
-  # Fine-grained for exact matches
+  # Fine-grained chunks for all queries (Q&A and Summary)
   fine_grained:
-    chunk_size: 400      # Small chunks for precise matches
-    chunk_overlap: 80    # 20% overlap
-    
-  # Coarse for document-level context
-  coarse_grained:
-    chunk_size: 3000     # ~1 page for full section context
-    chunk_overlap: 500   # Cross-section continuity
-    
-  enable_hybrid: true    # Enable both Stream A and Stream B
+    chunk_size: 500      # 500 words for specific details
+    chunk_overlap: 150   # 150 words overlap
+    method: "recursive"  # RecursiveCharacterTextSplitter for natural breaks
+    clean_headers: true  # Remove "Page X of Y" footers
+    exclude_tables: true # Tables are handled separately in database
     
 extraction:
   enable_llm_fallback: true

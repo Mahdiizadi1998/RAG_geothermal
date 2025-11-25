@@ -59,81 +59,55 @@ class PreprocessingAgent:
     
     def process(self, documents: List[Dict]) -> Dict[str, List[Dict]]:
         """
-        Create multi-strategy chunks from documents with hybrid chunking
+        Create fine-grained chunks from documents (excluding table content)
         
         Args:
             documents: List of document dicts from IngestionAgent
             
         Returns:
-            Dict with keys: 'factual_qa', 'technical_extraction', 'summary', 
-            and optionally 'fine_grained', 'coarse_grained' if hybrid enabled
-            Each contains list of chunk dicts with:
+            Dict with key 'fine_grained' containing list of chunk dicts with:
             {
                 'text': str,
                 'doc_id': str,
                 'chunk_id': str,
-                'strategy': str,
-                'page_numbers': List[int],
                 'well_names': List[str],
-                'metadata': Dict
+                'section_headers': List[str]
             }
         """
-        # Initialize with base strategies
-        all_chunks = {
-            'factual_qa': [],
-            'technical_extraction': [],
-            'summary': []
-        }
+        all_chunks = {'fine_grained': []}
         
-        # Add hybrid strategies if enabled
-        enable_hybrid = self.chunking_config.get('enable_hybrid', False)
-        if enable_hybrid:
-            all_chunks['fine_grained'] = []
-            all_chunks['coarse_grained'] = []
-            logger.info("Hybrid chunking enabled - using multiple granularities")
+        # Get fine_grained config
+        fine_config = self.chunking_config.get('fine_grained', {
+            'chunk_size': 500,
+            'chunk_overlap': 150
+        })
         
         for doc in documents:
             logger.info(f"Chunking document: {doc['filename']}")
             
-            # Create chunks for each strategy
-            for strategy_name, strategy_config in self.chunking_config.items():
-                # Skip non-strategy config keys
-                if strategy_name == 'enable_hybrid' or not isinstance(strategy_config, dict):
-                    continue
-                
-                # Skip 'tables' strategy - handled separately in hybrid pipeline
-                # Tables are NOT chunked - they're extracted row-by-row with metadata
-                if strategy_name == 'tables':
-                    logger.info(f"  {strategy_name}: Skipping (handled by hybrid table extraction)")
-                    continue
-                
-                # Only process hybrid strategies if enabled
-                if strategy_name in ['fine_grained', 'coarse_grained'] and not enable_hybrid:
-                    continue
-                
-                # Check if strategy has chunk_size (narrative strategies do, tables don't)
-                if 'chunk_size' not in strategy_config:
-                    logger.warning(f"  {strategy_name}: Missing chunk_size, skipping")
-                    continue
-                
-                chunks = self._create_chunks(
-                    doc=doc,
-                    strategy=strategy_name,
-                    chunk_size=strategy_config['chunk_size'],
-                    chunk_overlap=strategy_config['chunk_overlap']
-                )
-                all_chunks[strategy_name].extend(chunks)
-                logger.info(f"  {strategy_name}: {len(chunks)} chunks")
+            # Extract section headers from full text
+            section_headers = self._extract_section_headers(doc['content'])
+            
+            # Create fine-grained chunks
+            chunks = self._create_chunks(
+                doc=doc,
+                section_headers=section_headers,
+                chunk_size=fine_config['chunk_size'],
+                chunk_overlap=fine_config['chunk_overlap']
+            )
+            all_chunks['fine_grained'].extend(chunks)
+            logger.info(f"  fine_grained: {len(chunks)} chunks, {len(section_headers)} section headers")
         
         return all_chunks
     
-    def _create_chunks(self, doc: Dict, strategy: str, chunk_size: int, chunk_overlap: int) -> List[Dict]:
+    def _create_chunks(self, doc: Dict, section_headers: List[str], 
+                       chunk_size: int, chunk_overlap: int) -> List[Dict]:
         """
-        Create chunks using specific strategy
+        Create chunks from document content
         
         Args:
             doc: Document dict from IngestionAgent
-            strategy: Strategy name
+            section_headers: List of section headers found in document
             chunk_size: Target chunk size in words
             chunk_overlap: Overlap size in words
         """
@@ -157,12 +131,13 @@ class PreprocessingAgent:
             if current_word_count + sent_word_count > chunk_size and current_chunk:
                 # Create chunk
                 chunk_text = ' '.join(current_chunk)
-                chunk_dict = self._create_chunk_dict(
-                    text=chunk_text,
-                    doc=doc,
-                    strategy=strategy,
-                    chunk_id=chunk_id
-                )
+                chunk_dict = {
+                    'text': chunk_text,
+                    'doc_id': doc['filename'],
+                    'chunk_id': f"{doc['filename']}_fine_{chunk_id}",
+                    'well_names': doc['wells'],
+                    'section_headers': section_headers
+                }
                 chunks.append(chunk_dict)
                 chunk_id += 1
                 
@@ -190,12 +165,13 @@ class PreprocessingAgent:
         # Add final chunk
         if current_chunk:
             chunk_text = ' '.join(current_chunk)
-            chunk_dict = self._create_chunk_dict(
-                text=chunk_text,
-                doc=doc,
-                strategy=strategy,
-                chunk_id=chunk_id
-            )
+            chunk_dict = {
+                'text': chunk_text,
+                'doc_id': doc['filename'],
+                'chunk_id': f"{doc['filename']}_fine_{chunk_id}",
+                'well_names': doc['wells'],
+                'section_headers': section_headers
+            }
             chunks.append(chunk_dict)
         
         return chunks
@@ -261,67 +237,28 @@ class PreprocessingAgent:
         sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
         return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
     
-    def _create_chunk_dict(self, text: str, doc: Dict, strategy: str, chunk_id: int) -> Dict:
-        """Create chunk dictionary with enhanced metadata including section headers and table/figure refs"""
-        # Estimate which pages this chunk might be from
-        # This is approximate since we don't track exact positions
-        page_numbers, page_metadata = self._estimate_pages_with_metadata(text, doc)
-        
-        return {
-            'text': text,
-            'doc_id': doc['filename'],
-            'chunk_id': f"{doc['filename']}_{strategy}_{chunk_id}",
-            'strategy': strategy,
-            'page_numbers': page_numbers,
-            'well_names': doc['wells'],
-            'metadata': {
-                'total_pages': doc['pages'],
-                'source_file': doc['filename'],
-                'section_headers': page_metadata.get('section_headers', []),
-                'table_refs': page_metadata.get('table_refs', []),
-                'figure_refs': page_metadata.get('figure_refs', [])
-            }
-        }
-    
-    def _estimate_pages_with_metadata(self, chunk_text: str, doc: Dict) -> tuple:
+    def _extract_section_headers(self, text: str) -> List[str]:
         """
-        Estimate which pages contain this chunk's text and extract metadata
+        Extract major section headers from text
         
+        Args:
+            text: Full document text
+            
         Returns:
-            Tuple of (page_numbers: List[int], metadata: Dict)
+            List of section headers
         """
-        sample = chunk_text[:100].lower()
-        matching_pages = []
-        combined_metadata = {
-            'section_headers': [],
-            'table_refs': [],
-            'figure_refs': []
-        }
+        section_headers = []
         
-        for page in doc['page_contents']:
-            if sample in page['text'].lower():
-                matching_pages.append(page['page_number'])
-                
-                # Collect metadata from matching pages
-                if 'section_headers' in page:
-                    combined_metadata['section_headers'].extend(page['section_headers'])
-                if 'table_refs' in page:
-                    combined_metadata['table_refs'].extend(page['table_refs'])
-                if 'figure_refs' in page:
-                    combined_metadata['figure_refs'].extend(page['figure_refs'])
+        # Extract section headers (numbered sections like "4. GEOLOGY" or "4.1 Formation Tops")
+        section_pattern = r'^\s*([0-9]+(?:\.[0-9]+)*)\s+([A-Z][A-Z\s,&-]+)$'
+        for line in text.split('\n'):
+            match = re.match(section_pattern, line.strip())
+            if match:
+                section_num = match.group(1)
+                section_name = match.group(2).strip()
+                section_headers.append(f"{section_num} {section_name}")
         
-        # Remove duplicates while preserving order
-        combined_metadata['section_headers'] = list(dict.fromkeys(combined_metadata['section_headers']))
-        combined_metadata['table_refs'] = list(dict.fromkeys(combined_metadata['table_refs']))
-        combined_metadata['figure_refs'] = list(dict.fromkeys(combined_metadata['figure_refs']))
-        
-        # If no exact match, return approximate range
-        if not matching_pages:
-            matching_pages = [1]  # Default to page 1
-        
-        return matching_pages, combined_metadata
-        
-        return matching_pages
+        return section_headers
     
     def get_chunk_statistics(self, chunks: Dict[str, List[Dict]]) -> Dict:
         """

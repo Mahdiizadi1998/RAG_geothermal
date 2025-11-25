@@ -78,173 +78,108 @@ class RAGRetrievalAgent:
             settings=Settings(anonymized_telemetry=False)
         )
         
-        # Collection names - includes hybrid strategies
-        self.collection_names = {
-            'factual_qa': 'geo_factual',
-            'technical_extraction': 'geo_technical',
-            'summary': 'geo_summary',
-            'fine_grained': 'geo_fine',
-            'coarse_grained': 'geo_coarse'
-        }
+        # Single collection name for fine-grained chunks
+        self.collection_name = 'geo_fine_grained'
         
-        # Collections will be created during indexing
-        self.collections = {}
+        # Collection will be created during indexing
+        self.collection = None
         
         logger.info(f"Initialized RAGRetrievalAgent with DB at {db_path}")
     
     def index_chunks(self, chunks_dict: Dict[str, List[Dict]]) -> None:
         """
-        Index chunks into ChromaDB collections
+        Index fine-grained chunks into single ChromaDB collection
         
         Args:
-            chunks_dict: Dict with keys 'factual_qa', 'technical_extraction', 'summary'
-                        and optionally 'fine_grained', 'coarse_grained'
-                        Each contains list of chunk dicts
+            chunks_dict: Dict with key 'fine_grained' containing list of chunk dicts
         """
-        for strategy, chunks in chunks_dict.items():
-            if not chunks:
-                logger.warning(f"No chunks for strategy: {strategy}")
-                continue
+        chunks = chunks_dict.get('fine_grained', [])
+        
+        if not chunks:
+            logger.warning("No fine-grained chunks to index")
+            return
+        
+        # Delete existing collection if it exists
+        try:
+            self.client.delete_collection(self.collection_name)
+            logger.info(f"Deleted existing collection: {self.collection_name}")
+        except Exception:
+            # Collection doesn't exist, which is fine
+            pass
+        
+        # Create new collection
+        try:
+            self.collection = self.client.create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+                embedding_function=self.embedding_function
+            )
+        except Exception as e:
+            logger.error(f"Failed to create collection {self.collection_name}: {str(e)}")
+            raise
+        
+        # Prepare data for indexing (minimal metadata)
+        ids = []
+        documents = []
+        metadatas = []
+        
+        for chunk in chunks:
+            ids.append(chunk['chunk_id'])
+            documents.append(chunk['text'])
             
-            # Skip if strategy not recognized
-            if strategy not in self.collection_names:
-                logger.warning(f"Unknown strategy: {strategy}, skipping")
-                continue
+            # Store minimal metadata - well names only
+            metadata = {
+                'doc_id': chunk['doc_id'],
+                'well_names': ','.join(chunk.get('well_names', []))
+            }
+            metadatas.append(metadata)
+        
+        # Add to collection in batches
+        batch_size = 100
+        for i in range(0, len(ids), batch_size):
+            batch_ids = ids[i:i+batch_size]
+            batch_docs = documents[i:i+batch_size]
+            batch_metas = metadatas[i:i+batch_size]
             
-            collection_name = self.collection_names[strategy]
-            
-            # Delete existing collection if it exists (with version compatibility handling)
-            try:
-                self.client.delete_collection(collection_name)
-                logger.info(f"Deleted existing collection: {collection_name}")
-            except KeyError as e:
-                # ChromaDB version mismatch - collection format incompatible
-                logger.warning(f"Collection {collection_name} has incompatible format, will recreate")
-            except Exception as e:
-                # Collection doesn't exist, which is fine
-                pass
-            
-            # Create new collection with Ollama embeddings
-            try:
-                collection = self.client.create_collection(
-                    name=collection_name,
-                    metadata={"hnsw:space": "cosine"},
-                    embedding_function=self.embedding_function
-                )
-            except Exception as e:
-                logger.error(f"Failed to create collection {collection_name}: {str(e)}")
-                raise
-            
-            # Prepare data for indexing
-            ids = []
-            documents = []
-            metadatas = []
-            
-            for chunk in chunks:
-                ids.append(chunk['chunk_id'])
-                documents.append(chunk['text'])
-                
-                # Store metadata
-                metadata = {
-                    'doc_id': chunk['doc_id'],
-                    'strategy': chunk['strategy'],
-                    'page_numbers': ','.join(map(str, chunk['page_numbers'])),
-                    'well_names': ','.join(chunk['well_names']) if chunk['well_names'] else '',
-                    'source_file': chunk['metadata']['source_file']
-                }
-                metadatas.append(metadata)
-            
-            # Add to collection in batches
-            batch_size = 100
-            for i in range(0, len(ids), batch_size):
-                batch_ids = ids[i:i+batch_size]
-                batch_docs = documents[i:i+batch_size]
-                batch_metas = metadatas[i:i+batch_size]
-                
-                collection.add(
-                    ids=batch_ids,
-                    documents=batch_docs,
-                    metadatas=batch_metas
-                )
-            
-            self.collections[strategy] = collection
-            logger.info(f"✓ Indexed {len(ids)} chunks into {collection_name}")
+            self.collection.add(
+                ids=batch_ids,
+                documents=batch_docs,
+                metadatas=batch_metas
+            )
+        
+        logger.info(f"✓ Indexed {len(ids)} chunks into {self.collection_name}")
     
-    def retrieve(self, query: str, mode: str = 'qa', top_k: Optional[int] = None, 
-                 well_name: Optional[str] = None) -> Dict:
+    def retrieve(self, query: str, top_k: int = 10) -> List[Dict]:
         """
-        Retrieve relevant chunks for a query
+        Retrieve relevant chunks for a query from single fine-grained collection
         
         Args:
             query: Search query
-            mode: 'qa', 'extract', or 'summary'
-            top_k: Number of results to return (uses config default if None)
-            well_name: Optional well name to filter results
+            top_k: Number of results to return
             
         Returns:
-            Dict with:
-            {
-                'chunks': List[Dict],  # Retrieved chunks with scores
-                'query': str,
-                'mode': str,
-                'top_k': int
-            }
+            List of chunk dictionaries with text and metadata
         """
-        # Map mode to strategy
-        strategy_map = {
-            'qa': 'factual_qa',
-            'extract': 'technical_extraction',
-            'summary': 'summary'
-        }
-        
-        strategy = strategy_map.get(mode, 'factual_qa')
-        
-        # Get top_k from config if not specified
-        if top_k is None:
-            top_k_map = {
-                'qa': self.retrieval_config['top_k_qa'],
-                'extract': self.retrieval_config['top_k_extraction'],
-                'summary': self.retrieval_config['top_k_summary']
-            }
-            top_k = top_k_map.get(mode, 10)
-        
-        # Load collection if not already loaded
-        if strategy not in self.collections:
-            collection_name = self.collection_names[strategy]
+        if not self.collection:
+            # Try to load existing collection
             try:
-                self.collections[strategy] = self.client.get_collection(
-                    name=collection_name,
+                self.collection = self.client.get_collection(
+                    name=self.collection_name,
                     embedding_function=self.embedding_function
                 )
             except:
-                logger.error(f"Collection not found: {collection_name}. Run indexing first.")
-                return {'chunks': [], 'query': query, 'mode': mode, 'top_k': top_k}
-        
-        collection = self.collections[strategy]
-        
-        # Build query filter for well name if provided
-        # Note: Skip filtering in older ChromaDB versions that don't support $contains
-        # Instead, filter results after retrieval
-        where_filter = None
-        # Commenting out $contains filter as it's not supported in all ChromaDB versions
-        # if well_name:
-        #     where_filter = {
-        #         "$or": [
-        #             {"well_names": {"$contains": well_name}},
-        #             {"doc_id": {"$contains": well_name}}
-        #         ]
-        #     }
+                logger.error(f"Collection not found: {self.collection_name}. Run indexing first.")
+                return []
         
         # Query collection
         try:
-            results = collection.query(
+            results = self.collection.query(
                 query_texts=[query],
-                n_results=min(top_k, collection.count()),
-                where=where_filter
+                n_results=min(top_k, self.collection.count())
             )
         except Exception as e:
             logger.error(f"Query failed: {str(e)}")
-            return {'chunks': [], 'query': query, 'mode': mode, 'top_k': top_k}
+            return []
         
         # Format results
         chunks = []
@@ -256,38 +191,10 @@ class RAGRetrievalAgent:
                     'distance': results['distances'][0][i],
                     'metadata': results['metadatas'][0][i]
                 }
-                
-                # Parse page numbers back to list
-                if chunk['metadata'].get('page_numbers'):
-                    chunk['metadata']['page_numbers'] = [
-                        int(p) for p in chunk['metadata']['page_numbers'].split(',') if p
-                    ]
-                
-                # Parse well names back to list
-                if chunk['metadata'].get('well_names'):
-                    chunk['metadata']['well_names'] = [
-                        w.strip() for w in chunk['metadata']['well_names'].split(',') if w
-                    ]
-                
-                # Post-retrieval filtering by well name (for ChromaDB compatibility)
-                if well_name:
-                    well_names = chunk['metadata'].get('well_names', [])
-                    doc_id = chunk['metadata'].get('doc_id', '')
-                    # Check if well_name appears in well_names list or doc_id
-                    if not (any(well_name.upper() in wn.upper() for wn in well_names) or 
-                            well_name.upper() in doc_id.upper()):
-                        continue  # Skip this chunk
-                
                 chunks.append(chunk)
         
-        logger.info(f"Retrieved {len(chunks)} chunks for mode='{mode}', query='{query[:50]}...'")
-        
-        return {
-            'chunks': chunks,
-            'query': query,
-            'mode': mode,
-            'top_k': top_k
-        }
+        logger.info(f"Retrieved {len(chunks)} chunks for query='{query[:50]}...'")
+        return chunks
     
     def retrieve_two_phase(self, query1: str, query2: str, mode1: str = 'extract', 
                           mode2: str = 'summary', top_k1: int = 15, 

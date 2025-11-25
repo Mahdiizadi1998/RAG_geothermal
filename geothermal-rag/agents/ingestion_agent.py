@@ -95,25 +95,11 @@ class IngestionAgent:
             'mod_date': doc.metadata.get('modDate', '')
         }
         
-        # Extract text page by page
-        page_contents = []
+        # Extract full text
         all_text = []
-        
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
-            
-            # Extract metadata from page
-            page_metadata = self._extract_page_metadata(text, page_num + 1)
-            
-            page_contents.append({
-                'page_number': page_num + 1,  # 1-indexed for human readability
-                'text': text,
-                'section_headers': page_metadata['section_headers'],
-                'table_refs': page_metadata['table_refs'],
-                'figure_refs': page_metadata['figure_refs']
-            })
-            
             all_text.append(text)
         
         doc.close()
@@ -132,10 +118,9 @@ class IngestionAgent:
             'filename': pdf_path.name,
             'filepath': str(pdf_path),
             'content': full_text,
-            'pages': len(page_contents),
+            'pages': len(doc),
             'wells': well_names,
-            'metadata': metadata,
-            'page_contents': page_contents
+            'metadata': metadata
         }
     
     def _extract_well_names(self, text: str) -> List[str]:
@@ -159,47 +144,28 @@ class IngestionAgent:
         
         return unique_wells
     
-    def _extract_page_metadata(self, text: str, page_num: int) -> Dict:
+    def _extract_section_headers(self, text: str) -> List[str]:
         """
-        Extract metadata from page text: section headers, table/figure references
+        Extract major section headers from text
         
         Args:
-            text: Page text content
-            page_num: Page number (1-indexed)
+            text: Full document text
             
         Returns:
-            Dict with section_headers, table_refs, figure_refs
+            List of section headers
         """
-        metadata = {
-            'section_headers': [],
-            'table_refs': [],
-            'figure_refs': []
-        }
+        section_headers = []
         
         # Extract section headers (numbered sections like "4. GEOLOGY" or "4.1 Formation Tops")
-        section_pattern = r'^\\s*([0-9]+(?:\\.[0-9]+)*)\\s+([A-Z][A-Z\\s,&-]+)$'
-        for line in text.split('\\n'):
+        section_pattern = r'^\s*([0-9]+(?:\.[0-9]+)*)\s+([A-Z][A-Z\s,&-]+)$'
+        for line in text.split('\n'):
             match = re.match(section_pattern, line.strip())
             if match:
                 section_num = match.group(1)
                 section_name = match.group(2).strip()
-                metadata['section_headers'].append(f"{section_num} {section_name}")
+                section_headers.append(f"{section_num} {section_name}")
         
-        # Extract table references ("Table 4-1", "Table 1:", etc.)
-        table_pattern = r'Table\\s+([0-9]+(?:-[0-9]+)?|[IVX]+)\\s*[:\\-]?\\s*([^\\n]*?)(?:\\n|$)'
-        for match in re.finditer(table_pattern, text, re.IGNORECASE):
-            table_num = match.group(1)
-            table_title = match.group(2).strip()[:50]  # First 50 chars of title
-            metadata['table_refs'].append(f"Table {table_num}: {table_title}")
-        
-        # Extract figure references ("Figure 3-1", "Fig. 5:", etc.)
-        figure_pattern = r'(?:Figure|Fig\\.)\\s+([0-9]+(?:-[0-9]+)?|[IVX]+)\\s*[:\\-]?\\s*([^\\n]*?)(?:\\n|$)'
-        for match in re.finditer(figure_pattern, text, re.IGNORECASE):
-            fig_num = match.group(1)
-            fig_title = match.group(2).strip()[:50]
-            metadata['figure_refs'].append(f"Figure {fig_num}: {fig_title}")
-        
-        return metadata
+        return section_headers
     
     def extract_tables(self, pdf_path: str) -> List[Dict]:
         """
@@ -293,10 +259,10 @@ class IngestionAgent:
         
         return f"Table {table_num}"
     
-    def process_and_store_tables(self, pdf_path: str, well_names: List[str]) -> int:
+    def process_and_store_complete_tables(self, pdf_path: str, well_names: List[str]) -> int:
         """
-        Extract tables from PDF, parse them, and store in database
-        Uses EnhancedTableParser for comprehensive data extraction
+        Extract complete tables from PDF and store in database
+        Stores entire table structure, not individual rows
         
         Args:
             pdf_path: Path to PDF file
@@ -305,8 +271,8 @@ class IngestionAgent:
         Returns:
             Number of tables successfully stored
         """
-        if not self.db or not self.table_parser:
-            logger.warning("Database or table parser not initialized - skipping table storage")
+        if not self.db:
+            logger.warning("Database not initialized - skipping table storage")
             return 0
         
         if not PDFPLUMBER_AVAILABLE:
@@ -318,156 +284,26 @@ class IngestionAgent:
         
         tables = self.extract_tables(pdf_path)
         stored_count = 0
-        general_data_stored = False
         
         for table in tables:
             try:
-                # Get surrounding context from page text
-                with pdfplumber.open(pdf_path) as pdf:
-                    page = pdf.pages[table['page'] - 1]
-                    page_text = page.extract_text() or ""
-                
-                # Identify table type
-                table_type = self.table_parser.identify_table_type(
-                    table['headers'], 
-                    table['rows'],
-                    page_text
+                # Store complete table with all data
+                table_id = self.db.store_complete_table(
+                    well_name=primary_well,
+                    source_document=Path(pdf_path).name,
+                    page=table['page'],
+                    table_type='auto_detected',
+                    table_reference=table['metadata'].get('table_ref', f"Table on page {table['page']}"),
+                    headers=table['headers'],
+                    rows=table['rows']
                 )
-                
-                logger.debug(f"Table on page {table['page']}: type={table_type}")
-                
-                # Skip excluded tables (geological logs, etc.)
-                if table_type == 'excluded':
-                    logger.debug(f"  Skipped excluded table on page {table['page']}")
-                    continue
-                
-                # Parse and store based on type
-                if table_type == 'general_data' and not general_data_stored:
-                    general_data = self.table_parser.parse_general_data_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    if general_data:
-                        # Remove source_page before passing to add_or_get_well (not a wells table column)
-                        general_data.pop('source_page', None)
-                        # Update well with general data
-                        self.db.add_or_get_well(primary_well, **general_data)
-                        stored_count += 1
-                        general_data_stored = True
-                        logger.info(f"  Stored general data for {primary_well}")
-                
-                elif table_type == 'casing':
-                    casing_data = self.table_parser.parse_casing_table(
-                        table['headers'], 
-                        table['rows'],
-                        table['page']
-                    )
-                    for casing in casing_data:
-                        self.db.add_casing_string(primary_well, casing)
-                    stored_count += len(casing_data)
-                    logger.info(f"  Stored {len(casing_data)} casing strings for {primary_well}")
-                
-                elif table_type == 'cementing':
-                    cementing_data = self.table_parser.parse_cementing_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    for cement_job in cementing_data:
-                        self.db.add_cementing_job(primary_well, cement_job)
-                    stored_count += len(cementing_data)
-                    logger.info(f"  Stored {len(cementing_data)} cementing jobs for {primary_well}")
-                
-                elif table_type == 'fluids':
-                    fluids_data = self.table_parser.parse_fluids_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    for fluid in fluids_data:
-                        self.db.add_drilling_fluid(primary_well, fluid)
-                    stored_count += len(fluids_data)
-                    logger.info(f"  Stored {len(fluids_data)} fluid records for {primary_well}")
-                
-                elif table_type == 'formations':
-                    formation_data = self.table_parser.parse_formation_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    for formation in formation_data:
-                        self.db.add_formation(primary_well, formation)
-                    stored_count += len(formation_data)
-                    logger.info(f"  Stored {len(formation_data)} formations for {primary_well}")
-                
-                elif table_type == 'incidents':
-                    incident_data = self.table_parser.parse_incidents_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    for incident in incident_data:
-                        self.db.add_incident(primary_well, incident)
-                    stored_count += len(incident_data)
-                    logger.info(f"  Stored {len(incident_data)} incidents for {primary_well}")
+                stored_count += 1
+                logger.debug(f"  Stored complete table {table_id} from page {table['page']}")
                 
             except Exception as e:
-                    incident_data = self.table_parser.parse_incidents_table(
-                        table['headers'],
-                        table['rows'],
-                        table['page']
-                    )
-                    for incident in incident_data:
-                        self.db.add_incident(primary_well, incident)
-                    stored_count += len(incident_data)
-                    logger.info(f"  Stored {len(incident_data)} incidents for {primary_well}")
-                
-            except Exception as e:
-                logger.error(f"Failed to process table on page {table['page']}: {str(e)}")
-                logger.exception(e)  # Full stack trace for debugging
+                logger.error(f"Failed to store table on page {table['page']}: {str(e)}")
                 continue
         
-        logger.info(f"Stored {stored_count} table records for {primary_well}")
+        logger.info(f"Stored {stored_count} complete tables for {primary_well}")
         return stored_count
-    
-    def get_page_text(self, document: Dict, page_number: int) -> Optional[str]:
-        """
-        Get text from a specific page
-        
-        Args:
-            document: Document dict from process()
-            page_number: Page number (1-indexed)
-            
-        Returns:
-            Text of the page, or None if page doesn't exist
-        """
-        for page in document['page_contents']:
-            if page['page_number'] == page_number:
-                return page['text']
-        return None
-    
-    def search_pages(self, document: Dict, query: str, case_sensitive: bool = False) -> List[int]:
-        """
-        Search for text across all pages
-        
-        Args:
-            document: Document dict from process()
-            query: Search string
-            case_sensitive: Whether to match case
-            
-        Returns:
-            List of page numbers containing the query
-        """
-        matching_pages = []
-        
-        for page in document['page_contents']:
-            text = page['text']
-            if not case_sensitive:
-                text = text.lower()
-                query = query.lower()
-            
-            if query in text:
-                matching_pages.append(page['page_number'])
-        
-        return matching_pages
+
