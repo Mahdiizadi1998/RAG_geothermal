@@ -90,6 +90,45 @@ class OllamaHelper:
                 return f"Based on the document: {context_chunks[0]['text'][:500]}..."
             return "Unable to generate answer."
     
+    def extract_information(self, extraction_prompt: str, context: str, 
+                           max_tokens: Optional[int] = None) -> str:
+        """
+        Extract specific information from context using LLM
+        
+        Args:
+            extraction_prompt: Instructions on what to extract and how to format
+            context: Source text containing the information
+            max_tokens: Optional limit on response length
+            
+        Returns:
+            Extracted information as formatted string
+        """
+        # Create extraction prompt
+        prompt = f"""You are a technical data extraction assistant for oil and gas well reports.
+
+Extract the requested information from the provided context. Follow these rules:
+1. Only include information that is explicitly found in the context
+2. If information is not found, do NOT mention it or say "not found"
+3. Use the exact format requested in the instructions
+4. Be concise and precise
+5. Include units where applicable (m, ft, inches, ppg, sg, etc.)
+6. For Pipe ID: Extract BOTH Nominal ID and Drift ID if available
+
+Instructions:
+{extraction_prompt}
+
+Context:
+{context}
+
+Extracted Information:"""
+        
+        try:
+            response = self._call_ollama(prompt, max_tokens or 1000)
+            return response.strip()
+        except Exception as e:
+            logger.error(f"LLM extraction failed: {str(e)}")
+            return ""
+    
     def generate_summary(self, chunks: List[Dict], target_words: int = None, 
                         focus: Optional[str] = None) -> str:
         """

@@ -296,17 +296,17 @@ class GeothermalRAGSystem:
     
     def _handle_summary(self, query: str) -> Tuple[str, str]:
         """
-        Generate summary by retrieving 8 data types from database and chunks
+        Generate comprehensive well summary by extracting 8 key data types
         
         8 Data Types:
-        1. General Data: Well Name, License, Well Type, Location, Coordinates, Operator, Rig, Target Formation
+        1. General Data: Well Name, License, Well Type, Location, Coordinates (X/Y), Operator, Rig Name, Target Formation
         2. Drilling Timeline: Spud Date, End of Operations, Total Days
         3. Depths: TD (mAH), TVD, Sidetrack Start Depth
         4. Casing & Tubulars: Type, OD, Weight, Grade, Connection, Pipe ID (Nominal + Drift), Top/Bottom Depths
         5. Cementing: Lead/Tail volumes, Densities, TOC
         6. Fluids: Hole Size, Fluid Type, Density Range
-        7. Geology/Formations: Formation names, depths, lithology, notes
-        8. Incidents: Gas peaks, stuck pipe, mud losses
+        7. Geology: Formation names, depths, lithology, notes (gas shows, instability)
+        8. Incidents: Gas peaks, stuck pipe events, mud losses
         """
         well_name = self._extract_well_name_from_query(query)
         
@@ -315,74 +315,216 @@ class GeothermalRAGSystem:
         
         logger.info(f"📝 Generating summary for {well_name}")
         
-        summary_parts = []
-        summary_parts.append(f"# Well Summary: {well_name}\n")
-        
-        # 1. Get ALL complete tables from DATABASE
+        # Get all data sources
         tables = self.db.get_complete_tables(well_name)
         logger.info(f"Retrieved {len(tables)} tables from database")
         
-        # Organize tables by type/content
+        # Organize tables by type
+        tables_by_type = {}
         for table in tables:
-            table_text = self._format_table_markdown(table)
-            summary_parts.append(table_text)
+            table_type = table.get('table_type', 'General')
+            if table_type not in tables_by_type:
+                tables_by_type[table_type] = []
+            tables_by_type[table_type].append(table)
         
-        # 2. Get narrative data from SEMANTIC SEARCH
-        searches = [
-            (f"{well_name} general data operator rig location", "## General Information"),
-            (f"{well_name} spud date completion timeline", "## Timeline"),
-            (f"{well_name} total depth TD TVD", "## Depths"),
-            (f"{well_name} geology formations lithology", "## Geology"),
-            (f"{well_name} incidents problems stuck pipe gas", "## Incidents")
+        summary_parts = []
+        summary_parts.append(f"# Well Summary: {well_name}\n")
+        
+        # Define extraction tasks for each section
+        extraction_tasks = [
+            {
+                'title': '## 1. General Data',
+                'table_types': ['General', 'auto_detected'],
+                'search_query': f"{well_name} well name license type location coordinates operator rig target formation",
+                'extraction_prompt': """Extract the following information:
+- Well Name
+- License Number
+- Well Type
+- Location/Field
+- Coordinates (X/Y or Lat/Long)
+- Operator
+- Rig Name
+- Target Formation
+
+Format as a bullet list. Only include information that is found."""
+            },
+            {
+                'title': '## 2. Drilling Timeline',
+                'table_types': ['Timeline', 'General'],
+                'search_query': f"{well_name} spud date completion date end operations drilling timeline duration days",
+                'extraction_prompt': """Extract the following timeline information:
+- Spud Date
+- End of Operations / Completion Date
+- Total Days / Duration
+
+Format as a bullet list. Only include information that is found."""
+            },
+            {
+                'title': '## 3. Depths',
+                'table_types': ['Depths', 'General'],
+                'search_query': f"{well_name} total depth TD TVD measured depth true vertical sidetrack kickoff",
+                'extraction_prompt': """Extract depth information:
+- TD (Total Depth in mAH)
+- TVD (True Vertical Depth)
+- Sidetrack Start Depth (if applicable)
+
+Format as a bullet list. Only include information that is found."""
+            },
+            {
+                'title': '## 4. Casing & Tubulars',
+                'table_types': ['Casing'],
+                'search_query': f"{well_name} casing tubing liner conductor surface intermediate production size OD ID weight grade",
+                'extraction_prompt': """Extract casing and tubular information. For EACH casing string, extract:
+- Type (Conductor, Surface, Intermediate, Production, Liner, etc.)
+- OD (Outside Diameter in inches)
+- Weight (lb/ft)
+- Grade (e.g., K-55, L-80, P-110)
+- Connection type
+- **Pipe ID - Both Nominal ID AND Drift ID** (very important)
+- Top Depth (mAH)
+- Bottom Depth (mAH)
+
+Format as a numbered list, one entry per casing string. Include Nominal and Drift ID for each string."""
+            },
+            {
+                'title': '## 5. Cementing',
+                'table_types': ['Cementing'],
+                'search_query': f"{well_name} cement lead tail slurry volume density TOC top of cement",
+                'extraction_prompt': """Extract cementing information for each cement job:
+- Lead Slurry Volume
+- Tail Slurry Volume
+- Lead Density (sg or ppg)
+- Tail Density (sg or ppg)
+- TOC (Top of Cement)
+
+Format as a bullet list or numbered list if multiple jobs. Only include information that is found."""
+            },
+            {
+                'title': '## 6. Drilling Fluids',
+                'table_types': ['Fluids'],
+                'search_query': f"{well_name} drilling fluid mud type density hole size water oil synthetic",
+                'extraction_prompt': """Extract drilling fluid information:
+- Hole Size (inches)
+- Fluid Type (WBM, OBM, SBM, etc.)
+- Density Range (sg or ppg)
+
+Format as a bullet list. List multiple hole sections if present. Only include information that is found."""
+            },
+            {
+                'title': '## 7. Geology & Formations',
+                'table_types': ['Formations', 'General'],
+                'search_query': f"{well_name} formation geology lithology gas show instability overpressure shale sandstone",
+                'extraction_prompt': """Extract geological information:
+- Formation names and depths
+- Lithology (rock types)
+- Key notes: Gas shows, instability issues, overpressure zones
+
+Format as a bullet list. Only include information that is found."""
+            },
+            {
+                'title': '## 8. Incidents & Issues',
+                'table_types': ['Incidents'],
+                'search_query': f"{well_name} incident stuck pipe gas kick loss circulation mud loss pressure",
+                'extraction_prompt': """Extract incidents and issues:
+- Gas peaks/kicks
+- Stuck pipe events
+- Mud losses / Lost circulation
+- Other significant drilling problems
+
+Format as a bullet list. Only include information that is found."""
+            }
         ]
         
-        for search_query, section_title in searches:
-            chunks = self.rag.retrieve(search_query, top_k=3)
-            if chunks:
-                summary_parts.append(f"\n{section_title}\n")
-                combined_text = "\n\n".join([c['text'][:300] for c in chunks])
-                
-                if self.llm_available:
-                    # Use LLM to summarize
-                    try:
-                        section_summary = self.llm.generate_answer(
-                            f"Summarize {section_title} for {well_name} in 2-3 sentences",
-                            [{'text': combined_text}]
-                        )
-                        summary_parts.append(section_summary)
-                    except:
-                        summary_parts.append(combined_text[:500])
-                else:
-                    summary_parts.append(combined_text[:500])
+        # Process each section
+        for task in extraction_tasks:
+            logger.info(f"Processing: {task['title']}")
+            
+            # Gather relevant tables
+            relevant_tables = []
+            for table_type in task['table_types']:
+                if table_type in tables_by_type:
+                    relevant_tables.extend(tables_by_type[table_type])
+            
+            # Get narrative context from semantic search
+            semantic_chunks = self.rag.retrieve(task['search_query'], top_k=3)
+            
+            # Combine all context
+            context_parts = []
+            
+            # Add table data
+            for table in relevant_tables[:5]:  # Limit to 5 tables per section
+                table_text = self._format_table_for_extraction(table)
+                context_parts.append(table_text)
+            
+            # Add semantic context
+            for chunk in semantic_chunks:
+                context_parts.append(chunk['text'][:500])
+            
+            if not context_parts:
+                # No data found for this section - skip it
+                logger.info(f"No data found for {task['title']}")
+                continue
+            
+            combined_context = "\n\n".join(context_parts)
+            
+            # Use LLM to extract key information
+            if self.llm_available:
+                try:
+                    extraction = self.llm.extract_information(
+                        task['extraction_prompt'],
+                        combined_context
+                    )
+                    
+                    if extraction and len(extraction.strip()) > 10:
+                        summary_parts.append(f"\n{task['title']}")
+                        summary_parts.append(extraction)
+                    else:
+                        logger.info(f"No relevant data extracted for {task['title']}")
+                except Exception as e:
+                    logger.error(f"LLM extraction failed for {task['title']}: {str(e)}")
+                    # Fallback: show abbreviated raw data
+                    summary_parts.append(f"\n{task['title']}")
+                    summary_parts.append(combined_context[:800])
+            else:
+                # No LLM: show abbreviated raw data
+                summary_parts.append(f"\n{task['title']}")
+                summary_parts.append(combined_context[:600])
         
         final_summary = "\n\n".join(summary_parts)
-        debug_info = f"Generated from {len(tables)} tables and semantic search"
+        debug_info = f"Generated from {len(tables)} tables across {len(tables_by_type)} types"
         
         return final_summary, debug_info
     
-    def _format_table_markdown(self, table: Dict) -> str:
-        """Convert table to markdown format"""
-        md = f"\n### {table.get('table_reference', 'Table')} (Page {table['source_page']})\n\n"
-        
-        # Parse JSON strings
+    def _format_table_for_extraction(self, table: Dict) -> str:
+        """Format table data for LLM extraction (compact format)"""
         import json
+        
         headers = json.loads(table.get('headers_json', '[]'))
         rows = json.loads(table.get('rows_json', '[]'))
         
-        # Headers
-        if headers:
-            md += "| " + " | ".join(str(h) for h in headers) + " |\n"
-            md += "| " + " | ".join(["---"] * len(headers)) + " |\n"
+        # Create compact text representation
+        table_text = f"Table from page {table['source_page']} ({table.get('table_type', 'Unknown')} type):\n"
         
-        # Rows (limit to 20 rows)
-        for row in rows[:20]:
-            md += "| " + " | ".join(str(cell) for cell in row) + " |\n"
+        # Limit rows to prevent context overflow
+        max_rows = 15
+        for i, row in enumerate(rows[:max_rows]):
+            if i == 0 or len(headers) == 0:
+                # First row or no headers: treat as data row
+                row_text = " | ".join(str(cell) for cell in row)
+            else:
+                # Create key-value pairs
+                row_pairs = []
+                for header, value in zip(headers, row):
+                    if value and str(value).strip():
+                        row_pairs.append(f"{header}: {value}")
+                row_text = ", ".join(row_pairs)
+            
+            table_text += f"  {row_text}\n"
         
-        if len(rows) > 20:
-            md += f"\n*({len(rows) - 20} more rows...)*\n"
+        if len(rows) > max_rows:
+            table_text += f"  ... ({len(rows) - max_rows} more rows)\n"
         
-        return md
-
+        return table_text
     
     def _extract_well_name(self, query: str) -> Optional[str]:
         """Extract well name from query"""
