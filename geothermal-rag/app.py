@@ -512,33 +512,195 @@ Format as a bullet list. Only include information that is found."""
         return final_summary, debug_info
     
     def _format_table_for_extraction(self, table: Dict) -> str:
-        """Format table data for LLM extraction (compact format)"""
+        """
+        Format table data for LLM extraction using improved formats:
+        1. Markdown tables for tabular data (easy to scan, preserves structure)
+        2. Hierarchical text for nested data (Pipe ID nominal + drift)
+        3. Emphasis markers for critical fields
+        4. Clear section separation for multi-row tables
+        """
         import json
         
         headers = json.loads(table.get('headers_json', '[]'))
         rows = json.loads(table.get('rows_json', '[]'))
+        table_type = table.get('table_type', 'Unknown')
+        page = table['source_page']
         
-        # Create compact text representation
-        table_text = f"Table from page {table['source_page']} ({table.get('table_type', 'Unknown')} type):\n"
+        if not headers or not rows:
+            return f"Empty table on page {page}\n"
         
-        # Limit rows to prevent context overflow
-        max_rows = 15
-        for i, row in enumerate(rows[:max_rows]):
-            if i == 0 or len(headers) == 0:
-                # First row or no headers: treat as data row
-                row_text = " | ".join(str(cell) for cell in row)
-            else:
-                # Create key-value pairs
-                row_pairs = []
-                for header, value in zip(headers, row):
-                    if value and str(value).strip():
-                        row_pairs.append(f"{header}: {value}")
-                row_text = ", ".join(row_pairs)
+        # Determine best format based on table type
+        if table_type.lower() in ['casing', 'cementing', 'fluids', 'formations']:
+            # Use markdown table format for structured tabular data
+            return self._format_as_markdown_table(headers, rows, table_type, page)
+        elif table_type.lower() in ['general', 'timeline', 'depths']:
+            # Use hierarchical format for key-value data
+            return self._format_as_hierarchical(headers, rows, table_type, page)
+        else:
+            # Default: markdown table
+            return self._format_as_markdown_table(headers, rows, table_type, page)
+    
+    def _format_as_markdown_table(self, headers: List[str], rows: List[List[str]], 
+                                   table_type: str, page: int) -> str:
+        """Format as markdown table with emphasis on critical fields"""
+        
+        # Build markdown table
+        table_text = f"\n**TABLE: {table_type.upper()} PROGRAM** (Page {page})\n"
+        table_text += "=" * 60 + "\n\n"
+        
+        # Identify critical columns (Pipe ID, Drift ID, depths)
+        critical_cols = []
+        for i, header in enumerate(headers):
+            header_lower = header.lower()
+            if any(keyword in header_lower for keyword in 
+                   ['id nominal', 'id drift', 'drift', 'nominal', 'pipe id', 'i.d.', 'inside diameter']):
+                critical_cols.append(i)
+        
+        # Create header row
+        header_row = "| " + " | ".join(headers) + " |"
+        separator = "|" + "|".join(["-" * (len(h) + 2) for h in headers]) + "|"
+        
+        table_text += header_row + "\n"
+        table_text += separator + "\n"
+        
+        # Add data rows (limit to 20 to prevent overflow)
+        max_rows = 20
+        for row_idx, row in enumerate(rows[:max_rows], 1):
+            # Pad row if shorter than headers
+            padded_row = row + [''] * (len(headers) - len(row))
             
-            table_text += f"  {row_text}\n"
+            # Format cells, mark critical fields
+            formatted_cells = []
+            for col_idx, (header, cell) in enumerate(zip(headers, padded_row)):
+                cell_str = str(cell) if cell else ''
+                
+                # Add emphasis marker for critical fields if value exists
+                if col_idx in critical_cols and cell_str.strip():
+                    cell_str = f"**{cell_str}** ←"
+                
+                formatted_cells.append(cell_str)
+            
+            row_text = "| " + " | ".join(formatted_cells) + " |"
+            table_text += row_text + "\n"
         
         if len(rows) > max_rows:
-            table_text += f"  ... ({len(rows) - max_rows} more rows)\n"
+            table_text += f"\n*... ({len(rows) - max_rows} more rows omitted)*\n"
+        
+        # Add legend for emphasis markers
+        if critical_cols:
+            table_text += "\n*Note: ← marks CRITICAL fields for equipment sizing/selection*\n"
+        
+        return table_text
+    
+    def _format_as_hierarchical(self, headers: List[str], rows: List[List[str]], 
+                                table_type: str, page: int) -> str:
+        """Format as hierarchical text with nested structures"""
+        
+        table_text = f"\n**{table_type.upper()} DATA** (Page {page})\n"
+        table_text += "=" * 60 + "\n\n"
+        
+        # For casing-like tables with multiple strings, use numbered sections
+        if len(rows) > 3 and any('type' in h.lower() for h in headers):
+            return self._format_as_numbered_sections(headers, rows, table_type, page)
+        
+        # For key-value tables (General, Timeline), format as bullet list
+        for row_idx, row in enumerate(rows[:20], 1):
+            if len(row) < 2:
+                continue
+            
+            # First column is typically the key/label
+            key = str(row[0]).strip()
+            values = [str(v).strip() for v in row[1:] if str(v).strip()]
+            
+            if not key or not values:
+                continue
+            
+            # Check if this is a critical field
+            key_lower = key.lower()
+            is_critical = any(keyword in key_lower for keyword in 
+                            ['depth', 'td', 'tvd', 'id', 'diameter', 'date'])
+            
+            marker = "  → CRITICAL: " if is_critical else "  • "
+            
+            if len(values) == 1:
+                table_text += f"{marker}{key}: {values[0]}\n"
+            else:
+                table_text += f"{marker}{key}:\n"
+                for val in values:
+                    table_text += f"      - {val}\n"
+        
+        return table_text
+    
+    def _format_as_numbered_sections(self, headers: List[str], rows: List[List[str]], 
+                                     table_type: str, page: int) -> str:
+        """Format multi-row tables as numbered sections with nested structures"""
+        
+        table_text = f"\n**{table_type.upper()} SPECIFICATIONS** (Page {page})\n"
+        table_text += "=" * 60 + "\n\n"
+        
+        # Identify special column groups
+        id_cols = {}  # Store ID-related columns
+        for i, header in enumerate(headers):
+            header_lower = header.lower()
+            if 'id nominal' in header_lower or 'nominal id' in header_lower:
+                id_cols['nominal'] = i
+            elif 'id drift' in header_lower or 'drift id' in header_lower:
+                id_cols['drift'] = i
+            elif 'pipe id' in header_lower or 'i.d.' in header_lower:
+                id_cols['id'] = i
+        
+        # Format each row as a numbered section
+        for row_idx, row in enumerate(rows[:15], 1):
+            # Get type/description (usually first column)
+            row_name = str(row[0]).strip() if row else f"Entry {row_idx}"
+            
+            table_text += f"[{row_idx}] {row_name.upper()}\n"
+            table_text += "-" * 40 + "\n"
+            
+            # Format fields
+            for col_idx, (header, value) in enumerate(zip(headers, row)):
+                if col_idx == 0:  # Skip first column (already used as section name)
+                    continue
+                
+                if not str(value).strip():
+                    continue
+                
+                header_lower = header.lower()
+                value_str = str(value).strip()
+                
+                # Handle Pipe ID fields specially (nested structure)
+                if col_idx in id_cols.values():
+                    continue  # Will handle below
+                
+                # Check if critical field
+                is_critical = any(keyword in header_lower for keyword in 
+                                ['grade', 'od', 'weight', 'depth', 'bottom', 'top'])
+                
+                if is_critical:
+                    table_text += f"  • {header}: {value_str}\n"
+                else:
+                    table_text += f"    {header}: {value_str}\n"
+            
+            # Add nested Pipe ID section if available
+            if id_cols:
+                table_text += "  • Pipe ID (CRITICAL FOR EQUIPMENT SIZING):\n"
+                if 'nominal' in id_cols and id_cols['nominal'] < len(row):
+                    nominal = str(row[id_cols['nominal']]).strip()
+                    if nominal:
+                        table_text += f"      - Nominal: {nominal} ← MAXIMUM ID\n"
+                if 'drift' in id_cols and id_cols['drift'] < len(row):
+                    drift = str(row[id_cols['drift']]).strip()
+                    if drift:
+                        table_text += f"      - Drift: {drift} ← MINIMUM ID (USE THIS)\n"
+                if 'id' in id_cols and id_cols['id'] < len(row):
+                    pipe_id = str(row[id_cols['id']]).strip()
+                    if pipe_id:
+                        table_text += f"      - ID: {pipe_id}\n"
+            
+            table_text += "\n"
+        
+        if len(rows) > 15:
+            table_text += f"*... ({len(rows) - 15} more entries omitted)*\n\n"
         
         return table_text
     

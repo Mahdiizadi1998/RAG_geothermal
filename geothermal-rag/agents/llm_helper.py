@@ -226,7 +226,7 @@ Extracted Information:"""
                     return summary
     
     def _create_qa_prompt(self, question: str, context: str) -> str:
-        """Create prompt for Q&A with strict grounding requirements"""
+        """Create prompt for Q&A with strict grounding requirements and table parsing instructions"""
         prompt = f"""You are a technical assistant for geothermal well engineering. Answer the question using ONLY information from the provided context.
 
 Context from well reports:
@@ -242,22 +242,35 @@ CRITICAL INSTRUCTIONS:
    - Do NOT make assumptions or inferences beyond what's explicitly stated
    - Do NOT use placeholder values or typical ranges
 
-2. ANSWER FORMAT:
+2. TABLE PARSING:
+   - Context contains MARKDOWN TABLES with headers and data rows
+   - Tables use | separators: | Header1 | Header2 | Header3 |
+   - **Bold** values indicate CRITICAL fields (Pipe ID, depths, grades)
+   - For Pipe ID questions:
+     * Nominal ID = Maximum inside diameter
+     * Drift ID = Minimum inside diameter (use for tool/equipment sizing)
+     * Look in columns labeled "Pipe ID Nominal", "Pipe ID Drift", "ID Nominal", "ID Drift"
+   - Match column headers to the question (e.g., "OD" for outside diameter, "Weight" for weight per foot)
+   - Read row data carefully - each row represents one casing string or entry
+
+3. ANSWER FORMAT:
    - Start with direct answer to the question
-   - Include ALL relevant numbers with units (e.g., "[depth] m MD", "[size] inch")
-   - Cite specific sections: "According to [document name], page X..."
+   - Include ALL relevant numbers with units (e.g., "12.415 inches", "2500 m MD", "68 lb/ft")
+   - For casing questions: Include Type, OD, Weight, Grade, AND both Nominal + Drift IDs
+   - Cite specific sections: "According to [table type], page X..."
    - If multiple sources mention the same fact, cite all
 
-3. MISSING INFORMATION:
+4. MISSING INFORMATION:
    - If context lacks the answer: "The provided documents do not contain information about [specific detail]"
    - If context has partial info: State what IS available, then note what's missing
    - Never fabricate or estimate missing data
 
-4. TECHNICAL PRECISION:
+5. TECHNICAL PRECISION:
    - Use exact terminology from the documents
    - Preserve all significant figures and units
    - Include well names, operator names, dates when mentioned
    - Note any uncertainties or ranges stated in documents
+   - For depths: Distinguish between MD (measured depth) and TVD (true vertical depth)
 
 Answer (grounded strictly in context):"""
         return prompt
@@ -490,7 +503,16 @@ Examples:
 Q: "What is the casing design?"
 A: table_type = 'Casing'
 
-Q: "When was the well spudded?"
+Q: "What is the pipe ID?"
+A: table_type = 'Casing'
+
+Q: "What is the total depth?" or "What is TD?" or "How deep is the well?"
+A: table_type IN ('Depths', 'General')
+
+Q: "What is the TVD?" or "True vertical depth?"
+A: table_type IN ('Depths', 'General')
+
+Q: "When was the well spudded?" or "Spud date?"
 A: table_type IN ('Timeline', 'General')
 
 Q: "What formations were encountered at 2000m?"
@@ -502,15 +524,34 @@ A: table_type = 'Cementing'
 Q: "What problems occurred during drilling?"
 A: table_type = 'Incidents'
 
-Q: "Summarize the well"
+Q: "What drilling fluid was used?"
+A: table_type = 'Fluids'
+
+Q: "Give me a summary" or "Tell me about the well"
 A: 1=1
 
-Rules:
-- Return ONLY the WHERE clause (without 'WHERE' keyword)
-- Use table_type for filtering
-- Use IN (...) for multiple types
-- Use 1=1 for broad/general questions
-- Do not include well_name filter (already handled)
+Q: "What is the casing and cementing program?"
+A: table_type IN ('Casing', 'Cementing')
+
+CRITICAL SYNTAX RULES:
+- For ONE type: table_type = 'TypeName'
+- For MULTIPLE types: table_type IN ('Type1', 'Type2', 'Type3')
+- For ALL types: 1=1
+- NEVER mix = with commas like: table_type = 'Type1', 'Type2'  ← WRONG!
+- Return ONLY the table_type filter, nothing else
+- Do NOT add: AND, ORDER BY, table_reference, or any other clauses
+- Do NOT include well_name filter (already handled)
+- ONLY use the exact table_type values listed above
+
+VALID responses:
+✓ table_type = 'Casing'
+✓ table_type IN ('Depths', 'General')
+✓ 1=1
+
+INVALID responses:
+✗ table_type = 'Casing' AND table_reference = 'complete_tables'
+✗ table_type IN ('Casing', 'Cementing') ORDER BY source_page
+✗ table_type = 'Casing', 'Cementing'
 
 SQL Filter:"""
         
@@ -526,6 +567,32 @@ SQL Filter:"""
             
             # Remove quotes if LLM added them
             sql_filter = sql_filter.strip('"').strip("'")
+            
+            # Fix common malformed patterns
+            import re
+            
+            # Pattern 1: Unclosed quotes or extra text after valid SQL
+            # e.g., "table_type = 'Casing' AND table_reference = 'complete_tables) ORDER BY..."
+            if "table_reference = 'complete_tables" in sql_filter or "ORDER BY" in sql_filter.upper():
+                # Remove invalid parts
+                sql_filter = re.sub(r"\s+AND\s+table_reference.*$", "", sql_filter, flags=re.IGNORECASE)
+                sql_filter = re.sub(r"\s+ORDER BY.*$", "", sql_filter, flags=re.IGNORECASE)
+                logger.warning(f"Removed invalid SQL clauses: {sql_filter}")
+            
+            # Pattern 2: table_type = 'Type1', 'Type2', 'Type3' (WRONG - mixed syntax)
+            if "table_type =" in sql_filter and "," in sql_filter and " IN " not in sql_filter.upper():
+                # Extract all quoted values
+                types = re.findall(r"'([^']+)'", sql_filter)
+                if len(types) > 1:
+                    # Convert to proper IN syntax
+                    fixed_filter = f"table_type IN ({', '.join(repr(t) for t in types)})"
+                    logger.warning(f"Fixed malformed SQL: '{sql_filter}' → '{fixed_filter}'")
+                    sql_filter = fixed_filter
+            
+            # Final validation: ensure quotes are balanced
+            if sql_filter.count("'") % 2 != 0:
+                logger.error(f"Unbalanced quotes in SQL: {sql_filter}")
+                return "1=1"  # Safe fallback
             
             logger.info(f"Generated SQL filter: {sql_filter}")
             return sql_filter

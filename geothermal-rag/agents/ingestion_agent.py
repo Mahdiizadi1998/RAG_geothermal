@@ -13,14 +13,15 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Try to import pdfplumber for table extraction
+# Try to import camelot for high-accuracy table extraction
 try:
-    import pdfplumber
-    PDFPLUMBER_AVAILABLE = True
-    logger.info("pdfplumber available for table extraction")
+    import camelot
+    CAMELOT_AVAILABLE = True
+    logger.info("✓ camelot-py available for high-accuracy table extraction")
 except ImportError:
-    PDFPLUMBER_AVAILABLE = False
-    logger.warning("pdfplumber not available - install: pip install pdfplumber")
+    CAMELOT_AVAILABLE = False
+    logger.warning("⚠️ camelot-py not available - install: pip install camelot-py[cv]")
+    logger.warning("   Also requires: sudo apt-get install ghostscript python3-tk")
 
 
 class IngestionAgent:
@@ -171,7 +172,13 @@ class IngestionAgent:
     
     def extract_tables(self, pdf_path: str) -> List[Dict]:
         """
-        Extract tables from PDF using pdfplumber
+        Extract tables from PDF using camelot with accuracy-based quality control
+        
+        Uses hybrid approach:
+        1. Lattice mode (for tables with visible borders/lines)
+        2. Stream mode (for tables without borders, whitespace-based)
+        3. Quality filtering (accuracy threshold to reject headers/footers)
+        4. Overlap detection (prevent duplicates from both modes)
         
         Args:
             pdf_path: Path to PDF file
@@ -180,73 +187,203 @@ class IngestionAgent:
             List of table dictionaries with structure:
             {
                 'page': int,
-                'table_num': int (on that page),
+                'table_num': int,
                 'headers': List[str],
                 'rows': List[List[str]],
-                'metadata': Dict (section, table ref, etc.)
+                'page_text': str,
+                'metadata': Dict (accuracy, method, bbox, table_ref)
             }
         """
-        if not PDFPLUMBER_AVAILABLE:
-            logger.warning("pdfplumber not available - cannot extract tables")
+        if not CAMELOT_AVAILABLE:
+            logger.warning("⚠️ camelot-py not available - cannot extract tables")
+            logger.warning("   Install: pip install camelot-py[cv]")
+            logger.warning("   System deps: sudo apt-get install ghostscript python3-tk")
             return []
         
-        tables = []
+        all_tables = []
         
         try:
-            with pdfplumber.open(pdf_path) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
-                    # Extract tables with vertical_strategy="text" for invisible grids
-                    page_tables = page.extract_tables(table_settings={
-                        "vertical_strategy": "text",
-                        "horizontal_strategy": "lines",
-                        "intersection_tolerance": 5
-                    })
-                    
-                    for table_idx, table_data in enumerate(page_tables, 1):
-                        if not table_data or len(table_data) < 2:  # Need headers + at least 1 row
-                            continue
-                        
-                        # First row is usually headers
-                        headers = [str(cell).strip() if cell else "" for cell in table_data[0]]
-                        
-                        # Remaining rows are data
-                        rows = []
-                        for row in table_data[1:]:
-                            row_data = [str(cell).strip() if cell else "" for cell in row]
-                            # Skip empty rows
-                            if any(cell for cell in row_data):
-                                rows.append(row_data)
-                        
-                        if not rows:
-                            continue
-                        
-                        # Get page text for context
-                        page_text = page.extract_text() or ""
-                        
-                        # Try to find table reference in page text
-                        table_ref = self._find_table_reference(page_text, table_idx)
-                        
-                        tables.append({
-                            'page': page_num,
-                            'table_num': table_idx,
-                            'headers': headers,
-                            'rows': rows,
-                            'page_text': page_text,  # Store full page text for well detection
-                            'metadata': {
-                                'table_ref': table_ref,
-                                'num_rows': len(rows),
-                                'num_cols': len(headers)
-                            }
+            # PHASE 1: Extract with Lattice mode (line-based detection)
+            logger.info(f"🔍 Phase 1: Lattice mode (line-based tables)...")
+            try:
+                tables_lattice = camelot.read_pdf(
+                    str(pdf_path),
+                    pages='all',
+                    flavor='lattice',
+                    line_scale=40,  # Sensitivity to line detection
+                    suppress_stdout=True
+                )
+                
+                for table in tables_lattice:
+                    # Quality filter
+                    if table.accuracy >= 75:  # Keep high-quality tables
+                        all_tables.append({
+                            'page': table.page,
+                            'camelot_obj': table,
+                            'data': table.data,  # 2D list
+                            'accuracy': table.accuracy,
+                            'method': 'lattice',
+                            'bbox': table._bbox
                         })
-                        
-                        logger.debug(f"  Extracted table {table_idx} from page {page_num}: {len(rows)} rows x {len(headers)} cols")
+                        logger.debug(f"  ✓ Table on page {table.page}: accuracy={table.accuracy:.1f}% (lattice)")
+                    else:
+                        logger.debug(f"  ✗ Rejected page {table.page}: accuracy={table.accuracy:.1f}% too low")
+                
+                logger.info(f"  → Found {len([t for t in all_tables if t['method']=='lattice'])} high-quality lattice tables")
+                
+            except Exception as e:
+                logger.warning(f"  Lattice mode failed: {e}")
             
-            logger.info(f"Extracted {len(tables)} tables from {pdf_path}")
+            # PHASE 2: Extract with Stream mode (whitespace-based detection)
+            logger.info(f"🔍 Phase 2: Stream mode (borderless tables)...")
+            try:
+                tables_stream = camelot.read_pdf(
+                    str(pdf_path),
+                    pages='all',
+                    flavor='stream',
+                    edge_tol=50,  # Tolerance for column edges
+                    row_tol=2,    # Tolerance for row detection
+                    suppress_stdout=True
+                )
+                
+                for table in tables_stream:
+                    # Slightly lower threshold for stream mode
+                    if table.accuracy >= 70:
+                        # Check if overlaps with existing lattice table
+                        if not self._overlaps_existing_table(table, all_tables):
+                            all_tables.append({
+                                'page': table.page,
+                                'camelot_obj': table,
+                                'data': table.data,
+                                'accuracy': table.accuracy,
+                                'method': 'stream',
+                                'bbox': table._bbox
+                            })
+                            logger.debug(f"  ✓ Table on page {table.page}: accuracy={table.accuracy:.1f}% (stream)")
+                        else:
+                            logger.debug(f"  ⊗ Skipped page {table.page}: overlaps with lattice table")
+                    else:
+                        logger.debug(f"  ✗ Rejected page {table.page}: accuracy={table.accuracy:.1f}% too low")
+                
+                logger.info(f"  → Found {len([t for t in all_tables if t['method']=='stream'])} additional stream tables")
+                
+            except Exception as e:
+                logger.warning(f"  Stream mode failed: {e}")
+            
+            # PHASE 3: Format tables into standard structure
+            logger.info(f"📊 Phase 3: Formatting {len(all_tables)} tables...")
+            formatted_tables = []
+            
+            # Get page text for context (using PyMuPDF)
+            page_texts = self._get_page_texts(pdf_path)
+            
+            for idx, table_info in enumerate(sorted(all_tables, key=lambda x: x['page']), 1):
+                table_data = table_info['data']
+                
+                if not table_data or len(table_data) < 2:
+                    continue
+                
+                # First row as headers
+                headers = [str(cell).strip() if cell else "" for cell in table_data[0]]
+                
+                # Remaining rows as data
+                rows = []
+                for row in table_data[1:]:
+                    row_data = [str(cell).strip() if cell else "" for cell in row]
+                    # Keep non-empty rows
+                    if any(cell for cell in row_data):
+                        rows.append(row_data)
+                
+                if not rows:
+                    continue
+                
+                # Get page text for well detection
+                page_num = table_info['page']
+                page_text = page_texts.get(page_num, "")
+                
+                # Find table reference in page text
+                table_ref = self._find_table_reference(page_text, idx)
+                
+                formatted_tables.append({
+                    'page': page_num,
+                    'table_num': idx,
+                    'headers': headers,
+                    'rows': rows,
+                    'page_text': page_text,
+                    'metadata': {
+                        'table_ref': table_ref,
+                        'num_rows': len(rows),
+                        'num_cols': len(headers),
+                        'accuracy': table_info['accuracy'],
+                        'method': table_info['method'],
+                        'bbox': table_info['bbox']
+                    }
+                })
+                
+                logger.debug(f"  ✓ Formatted table {idx} (page {page_num}): {len(rows)}×{len(headers)}, {table_info['accuracy']:.1f}% ({table_info['method']})")
+            
+            logger.info(f"✅ Extracted {len(formatted_tables)} tables total from {pdf_path}")
+            return formatted_tables
             
         except Exception as e:
-            logger.error(f"Table extraction failed for {pdf_path}: {str(e)}")
+            logger.error(f"❌ Camelot extraction failed for {pdf_path}: {str(e)}")
+            return []
+    
+    def _overlaps_existing_table(self, new_table, existing_tables: List[Dict]) -> bool:
+        """Check if new table overlaps significantly with existing tables on same page"""
+        new_page = new_table.page
+        new_bbox = new_table._bbox  # (x0, top, x1, bottom)
         
-        return tables
+        for existing in existing_tables:
+            if existing['page'] == new_page:
+                existing_bbox = existing['bbox']
+                
+                # Calculate overlap percentage
+                overlap = self._calculate_bbox_overlap(new_bbox, existing_bbox)
+                
+                # If more than 50% overlap, consider it duplicate
+                if overlap > 0.5:
+                    return True
+        
+        return False
+    
+    def _calculate_bbox_overlap(self, bbox1, bbox2) -> float:
+        """Calculate overlap ratio between two bounding boxes"""
+        x0_1, top_1, x1_1, bottom_1 = bbox1
+        x0_2, top_2, x1_2, bottom_2 = bbox2
+        
+        # Calculate intersection
+        x0_inter = max(x0_1, x0_2)
+        x1_inter = min(x1_1, x1_2)
+        top_inter = max(top_1, top_2)
+        bottom_inter = min(bottom_1, bottom_2)
+        
+        if x0_inter >= x1_inter or top_inter >= bottom_inter:
+            return 0.0  # No overlap
+        
+        # Areas
+        inter_area = (x1_inter - x0_inter) * (bottom_inter - top_inter)
+        bbox1_area = (x1_1 - x0_1) * (bottom_1 - top_1)
+        bbox2_area = (x1_2 - x0_2) * (bottom_2 - top_2)
+        
+        # Overlap ratio (intersection / smaller bbox)
+        smaller_area = min(bbox1_area, bbox2_area)
+        return inter_area / smaller_area if smaller_area > 0 else 0.0
+    
+    def _get_page_texts(self, pdf_path: str) -> Dict[int, str]:
+        """Extract text from all pages using PyMuPDF (for context)"""
+        page_texts = {}
+        
+        try:
+            doc = fitz.open(str(pdf_path))
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                page_texts[page_num + 1] = page.get_text()  # 1-indexed
+            doc.close()
+        except Exception as e:
+            logger.warning(f"Could not extract page texts: {e}")
+        
+        return page_texts
     
     def _find_table_reference(self, page_text: str, table_num: int) -> str:
         """Find table reference (like 'Table 4-1: Casing Details') in page text"""
@@ -283,8 +420,8 @@ class IngestionAgent:
             logger.warning("Database not initialized - skipping table storage")
             return 0
         
-        if not PDFPLUMBER_AVAILABLE:
-            logger.warning("pdfplumber not available - cannot extract tables")
+        if not CAMELOT_AVAILABLE:
+            logger.warning("⚠️ camelot-py not available - cannot extract tables")
             return 0
         
         if not well_names:

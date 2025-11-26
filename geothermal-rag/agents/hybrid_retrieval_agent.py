@@ -146,31 +146,95 @@ class HybridRetrievalAgent:
             return []
     
     def _format_table_as_text(self, table: Dict) -> str:
-        """Convert complete table to text format for LLM"""
-        parts = []
+        """Convert complete table to improved markdown format for LLM with emphasis on critical fields"""
+        import json
         
-        # Table reference and page
-        ref = table.get('table_reference', 'Table')
+        # Extract table data
+        headers_json = table.get('headers_json', '[]')
+        rows_json = table.get('rows_json', '[]')
+        headers = json.loads(headers_json) if isinstance(headers_json, str) else headers_json
+        rows = json.loads(rows_json) if isinstance(rows_json, str) else rows_json
+        
+        # Fallback to old keys if new keys not present
+        if not headers:
+            headers = table.get('headers', [])
+        if not rows:
+            rows = table.get('rows', [])
+        
+        table_type = table.get('table_type', 'Unknown')
         page = table.get('source_page', '?')
-        parts.append(f"{ref} (Page {page})")
-        parts.append("=" * 60)
         
-        # Headers
-        headers = table.get('headers', [])
-        if headers:
-            parts.append(" | ".join(str(h) for h in headers))
-            parts.append("-" * 60)
+        if not headers or not rows:
+            return f"Empty table on page {page}\n"
         
-        # Rows (all data: text and numbers)
-        rows = table.get('rows', [])
-        for row in rows[:50]:  # Limit to 50 rows to avoid overwhelming context
-            parts.append(" | ".join(str(cell) for cell in row))
+        # Build markdown table with emphasis on critical fields
+        table_text = f"\n**TABLE: {table_type.upper()}** (Page {page})\n"
+        table_text += "=" * 60 + "\n\n"
         
-        if len(rows) > 50:
-            parts.append(f"... ({len(rows) - 50} more rows)")
+        # Identify critical columns (Pipe ID, depths, grades)
+        critical_cols = []
+        id_nominal_col = None
+        id_drift_col = None
         
-        parts.append("")
-        return "\n".join(parts)
+        for i, header in enumerate(headers):
+            header_lower = header.lower()
+            # Check for ID columns
+            if 'id nominal' in header_lower or 'nominal id' in header_lower:
+                critical_cols.append(i)
+                id_nominal_col = i
+            elif 'id drift' in header_lower or 'drift id' in header_lower:
+                critical_cols.append(i)
+                id_drift_col = i
+            elif 'pipe id' in header_lower or 'i.d.' in header_lower or 'inside diameter' in header_lower:
+                critical_cols.append(i)
+            # Check for other critical fields
+            elif any(keyword in header_lower for keyword in 
+                   ['grade', 'od', 'weight', 'depth', 'td', 'tvd', 'bottom', 'top', 'toc']):
+                critical_cols.append(i)
+        
+        # Create markdown header row
+        header_row = "| " + " | ".join(headers) + " |\n"
+        separator = "|" + "|".join(["-" * (len(h) + 2) for h in headers]) + "|\n"
+        
+        table_text += header_row + separator
+        
+        # Add data rows with emphasis on critical fields (limit to 50 rows)
+        max_rows = 50
+        for row in rows[:max_rows]:
+            # Pad row if shorter than headers
+            padded_row = row + [''] * (len(headers) - len(row))
+            
+            # Format cells, mark critical fields
+            formatted_cells = []
+            for col_idx, cell in enumerate(padded_row):
+                cell_str = str(cell) if cell else ''
+                
+                # Add emphasis marker for critical fields if value exists
+                if col_idx in critical_cols and cell_str.strip():
+                    cell_str = f"**{cell_str}**"
+                
+                formatted_cells.append(cell_str)
+            
+            row_text = "| " + " | ".join(formatted_cells) + " |\n"
+            table_text += row_text
+        
+        if len(rows) > max_rows:
+            table_text += f"\n*... ({len(rows) - max_rows} more rows omitted)*\n"
+        
+        # Add legend for critical fields
+        if critical_cols:
+            table_text += "\n*Note: **Bold** fields are CRITICAL for equipment sizing/selection.*\n"
+        
+        # Add special note for Pipe ID fields
+        if id_nominal_col is not None or id_drift_col is not None:
+            table_text += "\n⚠️ PIPE ID GUIDE:\n"
+            if id_nominal_col is not None:
+                table_text += "  • Nominal ID = Maximum inside diameter\n"
+            if id_drift_col is not None:
+                table_text += "  • Drift ID = Minimum inside diameter (USE THIS for tool sizing)\n"
+        
+        table_text += "\n"
+        return table_text
     
     def _combine_results(self, results: Dict) -> str:
         """
