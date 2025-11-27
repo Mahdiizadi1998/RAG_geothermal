@@ -92,20 +92,26 @@ python -m spacy download en_core_web_sm
 # Pull Ollama models
 if [ "$OLLAMA_INSTALLED" = true ]; then
     echo ""
-    echo "Pulling Ollama models (this may take a few minutes)..."
+    echo "Pulling Ollama models (Advanced RAG System, ~10 minutes)..."
     
     if [ "$OLLAMA_RUNNING" = true ]; then
-        echo "Pulling llama3..."
-        ollama pull llama3
+        echo "Pulling llama3.1:8b (4.7GB - reasoning and QA)..."
+        ollama pull llama3.1:8b
         
-        echo "Pulling nomic-embed-text..."
+        echo "Pulling llava:7b (4.7GB - vision model for images)..."
+        ollama pull llava:7b
+        
+        echo "Pulling nomic-embed-text (embeddings - optional fallback)..."
         ollama pull nomic-embed-text
         
         echo "✓ Ollama models downloaded"
+        echo ""
+        echo "NOTE: System uses sentence-transformers (all-MiniLM-L6-v2) for embeddings by default"
     else
         echo "⚠️  Ollama not running. Models not downloaded."
         echo "   Start Ollama later and run:"
-        echo "   ollama pull llama3"
+        echo "   ollama pull llama3.1:8b"
+        echo "   ollama pull llava:7b"
         echo "   ollama pull nomic-embed-text"
     fi
 fi
@@ -137,7 +143,7 @@ if [ "$OLLAMA_INSTALLED" = false ]; then
     echo "   To enable full functionality:"
     echo "   1. Install Ollama: https://ollama.ai/"
     echo "   2. Start Ollama: ollama serve"
-    echo "   3. Pull models: ollama pull llama3 && ollama pull nomic-embed-text"
+    echo "   3. Pull models: ollama pull llama3.1:8b && ollama pull llava:7b"
     echo "   4. Run app: python app.py"
     echo ""
 elif [ "$OLLAMA_RUNNING" = false ]; then

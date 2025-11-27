@@ -117,21 +117,20 @@ echo.
 
 REM Pull Ollama models
 if "%OLLAMA_INSTALLED%"=="1" if "%OLLAMA_RUNNING%"=="1" (
-    echo Pulling Ollama models ^(CPU-optimized, ~10 minutes^)...
+    echo Pulling Ollama models ^(Advanced RAG System, ~10 minutes^)...
     echo.
-    echo Pulling phi3:mini ^(2.3GB - fast CPU model^)...
-    ollama pull phi3:mini
+    echo Pulling llama3.1:8b ^(4.7GB - reasoning and QA^)...
+    ollama pull llama3.1:8b
     echo.
-    echo Pulling gemma2:2b ^(1.6GB - efficient summary^)...
-    ollama pull gemma2:2b
+    echo Pulling llava:7b ^(4.7GB - vision model for images^)...
+    ollama pull llava:7b
     echo.
-    echo Pulling qwen2.5:7b ^(4.7GB - good extraction^)...
-    ollama pull qwen2.5:7b
-    echo.
-    echo Pulling nomic-embed-text ^(embeddings^)...
+    echo Pulling nomic-embed-text ^(embeddings - optional fallback^)...
     ollama pull nomic-embed-text
     echo.
     echo [OK] Ollama models downloaded
+    echo.
+    echo NOTE: System uses sentence-transformers ^(all-MiniLM-L6-v2^) for embeddings by default
     echo.
 )
 
@@ -167,9 +166,8 @@ if "%OLLAMA_INSTALLED%"=="0" (
     echo    1. Install Ollama: https://ollama.ai/
     echo    2. Start Ollama: ollama serve
     echo    3. Pull models:
-    echo       ollama pull phi3:mini
-    echo       ollama pull gemma2:2b
-    echo       ollama pull qwen2.5:7b
+    echo       ollama pull llama3.1:8b
+    echo       ollama pull llava:7b
     echo       ollama pull nomic-embed-text
     echo.
 ) else if "%OLLAMA_RUNNING%"=="0" (
@@ -178,15 +176,17 @@ if "%OLLAMA_INSTALLED%"=="0" (
 )
 
 echo ==========================================
-echo HYBRID PARSING STRATEGY ^(CPU-OPTIMIZED^):
+echo ADVANCED AGENTIC RAG SYSTEM:
 echo ==========================================
-echo ✓ CPU models: phi3:mini, gemma2:2b, qwen2.5:7b
-echo ✓ Stream A: Tables NOT chunked ^(preserves rows^)
-echo ✓ Stream B: Narrative split semantically ^(~800 tokens^)
-echo ✓ pdfplumber: Handles invisible grid lines
-echo ✓ Raw table data in metadata for exact retrieval
+echo ✓ Models: llama3.1:8b ^(QA^), llava:7b ^(Vision^)
+echo ✓ Embeddings: all-MiniLM-L6-v2 ^(sentence-transformers^)
+echo ✓ Ultimate Semantic Chunker: Late Chunking + Context
+echo ✓ RAPTOR Tree: Hierarchical summarization ^(HDBSCAN^)
+echo ✓ Hybrid Retrieval: Dense + Sparse ^(BM25^) + Graph
+echo ✓ Reranking: Cross-encoder + RRF fusion
+echo ✓ Vision: Image captioning for plots/diagrams
 echo ✓ 8-core CPU, 16GB RAM optimized
-echo ✓ Expected: ~2sec queries, ~12GB peak memory
+echo ✓ Expected: ~500ms queries, ~12GB peak memory
 echo.
 
 echo Virtual environment: %VENV_DIR%

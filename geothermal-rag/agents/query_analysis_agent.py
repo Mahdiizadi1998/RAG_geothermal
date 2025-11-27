@@ -1,6 +1,6 @@
 """
-Query Analysis Agent
-Analyzes user queries to detect intent, extract entities, and parse constraints.
+Query Analysis Agent with Intelligent Routing
+Analyzes user queries to detect intent, extract entities, and route to appropriate retrieval strategy
 """
 
 import re
@@ -11,16 +11,27 @@ from dataclasses import dataclass
 @dataclass
 class QueryAnalysis:
     """Structured query analysis result"""
-    query_type: str  # 'qa', 'summary', 'extraction'
+    query_type: str  # 'qa', 'summary', 'extraction', 'comparison', 'relationship'
+    retrieval_strategy: str  # 'vector', 'bm25', 'hybrid', 'raptor', 'graph', 'structured'
     target_word_count: Optional[int]  # Explicit word count if specified
     entities: Dict[str, List[str]]  # Extracted well names, depths, parameters
     priority: str  # 'high', 'medium', 'low'
     needs_clarification: bool
     detected_focus: List[str]  # Key topics/aspects
+    raptor_level: Optional[int]  # RAPTOR tree level to query (if applicable)
 
 
 class QueryAnalysisAgent:
-    """Analyzes queries to understand user intent and constraints"""
+    """
+    Analyzes queries and routes to appropriate retrieval strategy
+    
+    Routing Logic:
+    1. Factual Q&A → Hybrid (Vector + BM25)
+    2. Summary → RAPTOR (upper levels)
+    3. Extraction → Structured DB + BM25
+    4. Comparison → Knowledge Graph traversal
+    5. Relationship queries → Knowledge Graph
+    """
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
@@ -59,18 +70,21 @@ class QueryAnalysisAgent:
         
     def analyze(self, query: str) -> QueryAnalysis:
         """
-        Analyze query to extract intent, entities, and constraints.
+        Analyze query to extract intent, entities, constraints, and route to retrieval strategy.
         
         Args:
             query: User query string
             
         Returns:
-            QueryAnalysis object with structured information
+            QueryAnalysis object with structured information and routing decision
         """
         query_lower = query.lower()
         
         # Detect query type
         query_type = self._detect_query_type(query_lower)
+        
+        # Route to appropriate retrieval strategy
+        retrieval_strategy, raptor_level = self._route_query(query_lower, query_type)
         
         # Extract word count constraint
         target_word_count = self._extract_word_count(query_lower)
@@ -89,11 +103,13 @@ class QueryAnalysisAgent:
         
         return QueryAnalysis(
             query_type=query_type,
+            retrieval_strategy=retrieval_strategy,
             target_word_count=target_word_count,
             entities=entities,
             priority=priority,
             needs_clarification=needs_clarification,
-            detected_focus=detected_focus
+            detected_focus=detected_focus,
+            raptor_level=raptor_level
         )
     
     def _detect_query_type(self, query_lower: str) -> str:
@@ -183,6 +199,44 @@ class QueryAnalysisAgent:
             return True
         
         return False
+    
+    def _route_query(self, query_lower: str, query_type: str) -> tuple[str, Optional[int]]:
+        """
+        Route query to appropriate retrieval strategy based on intent
+        
+        Returns:
+            (retrieval_strategy, raptor_level)
+        """
+        # Summary queries → RAPTOR tree (upper levels for high-level summaries)
+        if query_type == 'summary':
+            if 'brief' in query_lower or 'overview' in query_lower:
+                return ('raptor', 2)  # High-level summary from level 2
+            elif 'detailed' in query_lower or 'comprehensive' in query_lower:
+                return ('raptor', 1)  # More detailed from level 1
+            else:
+                return ('raptor', None)  # Query all levels
+        
+        # Comparison queries → Knowledge Graph
+        if 'compar' in query_lower or 'differ' in query_lower or 'between' in query_lower:
+            return ('graph', None)
+        
+        # Relationship queries → Knowledge Graph
+        if 'related' in query_lower or 'connection' in query_lower or 'similar' in query_lower:
+            return ('graph', None)
+        
+        # Extraction with specific terms → BM25 + Structured
+        if query_type == 'extraction':
+            # Check for exact term matching needs
+            has_ids = bool(re.search(r'[A-Z]{2,}-GT-\d{2}', query_lower.upper()))
+            has_numbers = bool(re.search(r'\b\d+\.?\d*\s*(?:inch|m|bar|psi)\b', query_lower))
+            
+            if has_ids or has_numbers:
+                return ('bm25', None)  # Exact term matching
+            else:
+                return ('structured', None)  # Database query
+        
+        # Default: Hybrid dense+sparse retrieval for factual Q&A
+        return ('hybrid', None)
     
     def _detect_focus(self, query_lower: str) -> List[str]:
         """Detect key focus areas in query"""

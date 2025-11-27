@@ -1,19 +1,68 @@
 ollama:
   host: http://localhost:11434
-  # CPU-optimized models (8-core, 16GB RAM, no GPU)
-  # Strategy: Fast, efficient models that work well on CPU
-  model_qa: phi3:mini              # Fast CPU model for Q&A (2.3GB)
-  model_summary: gemma2:2b         # Efficient for summarization (1.6GB)
-  model_verification: phi3:mini    # Fast verification (2.3GB)
-  model_extraction: qwen2.5:7b     # Good balance for CPU (4.7GB)
-  model_embedding: nomic-embed-text
+  # Advanced Agentic RAG models - following reference architecture
+  # llama3.1:8b - Main reasoning engine (fast, capable, 4.7GB)
+  # llava:7b - Vision-language model for image/plot processing (4.7GB)
+  model_qa: llama3.1:8b           # Primary reasoning & generation (4.7GB)
+  model_summary: llama3.1:8b      # Same model for consistency
+  model_verification: llama3.1:8b # Same model for verification
+  model_extraction: llama3.1:8b   # Same model for extraction
+  model_vision: llava:7b          # Vision-language model for images (4.7GB)
+  model_embedding: nomic-embed-text  # Fast embeddings
   
 embeddings:
-  # Choose embedding backend: 'ollama' or 'sentence-transformers'
-  # WHY sentence-transformers: 2-3x faster on CPU, runs locally, no Ollama needed
+  # Using sentence-transformers with all-MiniLM-L6-v2 for all components
+  # WHY: 2-3x faster on CPU, runs locally, no Ollama needed, consistent across all modules
   backend: "sentence-transformers"  # Options: 'ollama' or 'sentence-transformers'
-  model: "sentence-transformers/all-MiniLM-L6-v2"  # Fast, quality embeddings (80MB)
+  model: "all-MiniLM-L6-v2"  # Fast, quality embeddings (80MB, 384 dims)
   # all-MiniLM-L6-v2: 384 dimensions, ~200 chunks/sec on CPU, great for technical text
+
+# Advanced Semantic Chunking (Ultimate Semantic Chunker)
+semantic_chunking:
+  enabled: true
+  similarity_threshold: 0.7  # Threshold for semantic breakpoints
+  min_chunk_size: 200        # Minimum words per chunk
+  max_chunk_size: 800        # Maximum words per chunk
+  context_window: 100        # Contextual enrichment window
+  use_late_chunking: true    # Enable Jina AI-style late chunking
+  use_contextual_enrichment: true  # Enable Anthropic-style context prepending
+
+# RAPTOR Tree Configuration
+raptor:
+  enabled: true
+  min_cluster_size: 5        # Minimum cluster size for HDBSCAN
+  max_tree_height: 3         # Maximum tree depth (0=leaves, 1+=summaries)
+  summary_word_count: 300    # Words per cluster summary
+  
+# Knowledge Graph Configuration  
+knowledge_graph:
+  enabled: true
+  similarity_threshold: 0.7  # Minimum similarity for edges
+  metadata_edge_types:       # Types of metadata connections
+    - same_well
+    - same_operator
+    - same_formation
+  max_neighbors: 10          # Max neighbors per node in similarity edges
+
+# BM25 Sparse Retrieval Configuration
+bm25:
+  enabled: true
+  k1: 1.5                    # Term frequency saturation
+  b: 0.75                    # Length normalization
+  
+# Reranking Configuration
+reranking:
+  enabled: true
+  method: "cross-encoder"    # Options: 'cross-encoder', 'llm', 'none'
+  model: "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Cross-encoder model
+  rrf_k: 60                  # Reciprocal Rank Fusion constant
+
+# Vision Processing Configuration
+vision:
+  enabled: true
+  model: "llava:7b"          # Vision-language model
+  classify_images: true      # Classify image types before captioning
+  max_caption_length: 300    # Maximum caption tokens
   # Timeouts optimized for CPU
   timeout: 600        # Q&A (10 min) - increased for stability
   timeout_summary: 600   # Summary (10 min) - no word limit, needs more time
