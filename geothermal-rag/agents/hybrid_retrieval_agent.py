@@ -6,6 +6,8 @@ Routes queries to appropriate backend based on query type
 import logging
 import re
 from typing import Dict, List, Optional, Any
+from agents.query_analysis_agent import create_query_analyzer
+from agents.reranker import create_reranker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +33,7 @@ class HybridRetrievalAgent:
         """
         self.db = database_manager
         self.semantic_rag = rag_retrieval_agent
+        self.config = config if isinstance(config, dict) else {}
         
         # Initialize LLM helper for SQL generation
         try:
@@ -43,11 +46,29 @@ class HybridRetrievalAgent:
             logger.warning(f"LLM not available for SQL generation: {e}")
             self.llm = None
             self.llm_available = False
+        
+        # Initialize query analyzer for intelligent routing
+        self.query_analyzer = None
+        if self.llm and self.config.get('query_analysis', {}).get('enabled', False):
+            try:
+                self.query_analyzer = create_query_analyzer(self.llm, self.config.get('query_analysis', {}))
+                logger.info("✓ Query analyzer initialized for intelligent routing")
+            except Exception as e:
+                logger.warning(f"Query analyzer initialization failed: {e}")
+        
+        # Initialize reranker for result fusion
+        self.reranker = None
+        if self.config.get('reranking', {}).get('enabled', False):
+            try:
+                self.reranker = create_reranker(self.config.get('reranking', {}))
+                logger.info("✓ Reranker initialized for result fusion")
+            except Exception as e:
+                logger.warning(f"Reranker initialization failed: {e}")
     
     def retrieve(self, query: str, well_name: Optional[str] = None, 
                 top_k: int = 10) -> Dict[str, Any]:
         """
-        Retrieve information - ALWAYS queries both database AND semantic search
+        Retrieve information with intelligent routing and reranking
         
         Args:
             query: User query
@@ -55,15 +76,32 @@ class HybridRetrievalAgent:
             top_k: Number of results for semantic search
             
         Returns:
-            Dict with 'database_results', 'semantic_results', 'combined_text'
+            Dict with 'database_results', 'semantic_results', 'combined_text', 'query_analysis'
         """
         logger.info(f"Hybrid retrieval for query: '{query[:50]}...'")
         
         results = {
             'database_results': [],
             'semantic_results': [],
-            'combined_text': ''
+            'combined_text': '',
+            'query_analysis': None
         }
+        
+        # Analyze query if analyzer available
+        if self.query_analyzer:
+            try:
+                analysis = self.query_analyzer.analyze(query, well_name)
+                results['query_analysis'] = analysis
+                logger.info(f"Query analysis: {analysis.query_type}, strategy: {analysis.retrieval_strategy}")
+                
+                # Adjust retrieval based on analysis
+                if analysis.retrieval_strategy == 'database_only':
+                    top_k = max(5, top_k // 2)  # Reduce semantic search weight
+                elif analysis.retrieval_strategy == 'semantic_only':
+                    logger.info("Query analysis suggests semantic-only, but querying both for completeness")
+                
+            except Exception as e:
+                logger.warning(f"Query analysis failed: {e}")
         
         # ALWAYS query database
         db_results = self._query_database(query, well_name)
@@ -72,6 +110,45 @@ class HybridRetrievalAgent:
         # ALWAYS query semantic search
         semantic_results = self._query_semantic(query, top_k)
         results['semantic_results'] = semantic_results
+        
+        # Combine and rerank if enabled
+        if self.reranker and (db_results or semantic_results):
+            try:
+                # Prepare all results for reranking
+                all_results = []
+                
+                # Add database results
+                for db_result in db_results:
+                    all_results.append({
+                        'text': db_result.get('text', ''),
+                        'score': 0.9,  # High initial score for database
+                        'source': 'database',
+                        'metadata': {
+                            'table_type': db_result.get('table_type'),
+                            'page': db_result.get('page')
+                        }
+                    })
+                
+                # Add semantic results
+                for sem_result in semantic_results:
+                    all_results.append({
+                        'text': sem_result.get('text', ''),
+                        'score': sem_result.get('score', 0.7),
+                        'source': 'semantic',
+                        'metadata': sem_result.get('metadata', {})
+                    })
+                
+                # Rerank combined results
+                reranked = self.reranker.rerank(query, all_results, top_k=top_k + len(db_results))
+                
+                # Separate back into database and semantic
+                results['database_results'] = [r for r in reranked if r.get('source') == 'database']
+                results['semantic_results'] = [r for r in reranked if r.get('source') == 'semantic']
+                
+                logger.info(f"Reranked to {len(reranked)} total results ({len(results['database_results'])} db, {len(results['semantic_results'])} semantic)")
+                
+            except Exception as e:
+                logger.error(f"Reranking failed: {e}")
         
         # Combine results with priority: database > semantic
         results['combined_text'] = self._combine_results(results)

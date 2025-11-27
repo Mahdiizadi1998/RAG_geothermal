@@ -1,6 +1,6 @@
 """
-RAG Retrieval Agent - Hybrid Search with Multi-Strategy Collections
-Implements vector search with ChromaDB and hybrid dense/sparse retrieval
+RAG Retrieval Agent - Advanced Hybrid Retrieval with Multiple Strategies
+Implements Dense + Sparse (BM25) + Knowledge Graph + RAPTOR multi-level retrieval
 """
 
 import chromadb
@@ -12,6 +12,12 @@ import yaml
 from pathlib import Path
 import hashlib
 import os
+
+# Import advanced retrieval components
+from agents.bm25_retrieval import create_bm25_retriever
+from agents.knowledge_graph import create_knowledge_graph
+from agents.raptor_tree import create_raptor_tree
+from agents.reranker import create_reranker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,6 +44,9 @@ class RAGRetrievalAgent:
         # Load configuration
         if config_path is None:
             config_path = Path(__file__).parent.parent / 'config' / 'config.yaml'
+        
+        # Store config path for later use (RAPTOR initialization)
+        self.config_path = config_path
         
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
@@ -83,6 +92,27 @@ class RAGRetrievalAgent:
         
         # Collection will be created during indexing
         self.collection = None
+        
+        # Initialize advanced retrieval components
+        self.bm25 = None
+        self.knowledge_graph = None
+        self.raptor = None
+        self.reranker = None
+        
+        # BM25 for sparse retrieval
+        if self.config.get('bm25', {}).get('enabled', False):
+            self.bm25 = create_bm25_retriever(self.config.get('bm25', {}))
+            logger.info("✓ BM25 retriever initialized")
+        
+        # Knowledge Graph for relationship-based retrieval
+        if self.config.get('knowledge_graph', {}).get('enabled', False):
+            self.knowledge_graph = create_knowledge_graph(self.config.get('knowledge_graph', {}))
+            logger.info("✓ Knowledge Graph initialized")
+        
+        # Reranker for result fusion
+        if self.config.get('reranking', {}).get('enabled', False):
+            self.reranker = create_reranker(self.config.get('reranking', {}))
+            logger.info("✓ Reranker initialized")
         
         logger.info(f"Initialized RAGRetrievalAgent with DB at {db_path}")
     
@@ -148,6 +178,27 @@ class RAGRetrievalAgent:
             )
         
         logger.info(f"✓ Indexed {len(ids)} chunks into {self.collection_name}")
+        
+        # Index into BM25 if enabled
+        if self.bm25:
+            logger.info("Building BM25 index...")
+            self.bm25.index_documents(chunks)
+            logger.info("✓ BM25 index built")
+        
+        # Build knowledge graph if enabled
+        if self.knowledge_graph:
+            logger.info("Building knowledge graph...")
+            self.knowledge_graph.build_graph(chunks)
+            logger.info("✓ Knowledge graph built")
+        
+        # Build RAPTOR tree if enabled
+        if self.config.get('raptor', {}).get('enabled', False):
+            logger.info("Building RAPTOR hierarchical tree...")
+            from agents.llm_helper import OllamaHelper
+            llm = OllamaHelper(self.config_path)
+            self.raptor = create_raptor_tree(llm, self.config.get('raptor', {}))
+            self.raptor.build_tree(chunks)
+            logger.info("✓ RAPTOR tree built")
     
     def retrieve(self, query: str, top_k: int = 10) -> List[Dict]:
         """
@@ -171,27 +222,75 @@ class RAGRetrievalAgent:
                 logger.error(f"Collection not found: {self.collection_name}. Run indexing first.")
                 return []
         
-        # Query collection
-        try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=min(top_k, self.collection.count())
-            )
-        except Exception as e:
-            logger.error(f"Query failed: {str(e)}")
-            return []
+        # Multi-strategy retrieval
+        all_results = []
         
-        # Format results
-        chunks = []
-        if results['ids'] and results['ids'][0]:
-            for i in range(len(results['ids'][0])):
-                chunk = {
-                    'text': results['documents'][0][i],
-                    'id': results['ids'][0][i],
-                    'distance': results['distances'][0][i],
-                    'metadata': results['metadatas'][0][i]
-                }
-                chunks.append(chunk)
+        # Dense vector retrieval (ChromaDB)
+        try:
+            dense_results = self.collection.query(
+                query_texts=[query],
+                n_results=min(top_k * 2, self.collection.count())
+            )
+            
+            if dense_results['ids'] and dense_results['ids'][0]:
+                for i in range(len(dense_results['ids'][0])):
+                    chunk = {
+                        'text': dense_results['documents'][0][i],
+                        'id': dense_results['ids'][0][i],
+                        'score': 1 - dense_results['distances'][0][i],  # Convert distance to similarity
+                        'metadata': dense_results['metadatas'][0][i],
+                        'source': 'dense'
+                    }
+                    all_results.append(chunk)
+            logger.info(f"Dense retrieval: {len(all_results)} chunks")
+        except Exception as e:
+            logger.error(f"Dense retrieval failed: {str(e)}")
+        
+        # Sparse retrieval (BM25)
+        if self.bm25:
+            try:
+                bm25_results = self.bm25.search(query, top_k=top_k * 2)
+                for result in bm25_results:
+                    result['source'] = 'sparse'
+                    all_results.append(result)
+                logger.info(f"BM25 retrieval: {len(bm25_results)} chunks")
+            except Exception as e:
+                logger.error(f"BM25 retrieval failed: {str(e)}")
+        
+        # Knowledge graph traversal
+        if self.knowledge_graph:
+            try:
+                kg_results = self.knowledge_graph.retrieve_related(query, top_k=top_k)
+                for result in kg_results:
+                    result['source'] = 'knowledge_graph'
+                    all_results.append(result)
+                logger.info(f"Knowledge graph: {len(kg_results)} chunks")
+            except Exception as e:
+                logger.error(f"Knowledge graph retrieval failed: {str(e)}")
+        
+        # RAPTOR hierarchical retrieval
+        if self.raptor:
+            try:
+                raptor_results = self.raptor.retrieve(query, top_k=top_k)
+                for result in raptor_results:
+                    result['source'] = 'raptor'
+                    all_results.append(result)
+                logger.info(f"RAPTOR retrieval: {len(raptor_results)} chunks")
+            except Exception as e:
+                logger.error(f"RAPTOR retrieval failed: {str(e)}")
+        
+        # Rerank if enabled, otherwise use dense results only
+        if self.reranker and len(all_results) > 0:
+            try:
+                chunks = self.reranker.rerank(query, all_results, top_k=top_k)
+                logger.info(f"Reranked to top {len(chunks)} chunks")
+            except Exception as e:
+                logger.error(f"Reranking failed: {str(e)}")
+                # Fall back to dense results
+                chunks = all_results[:top_k]
+        else:
+            # No reranking - just take top results from dense search
+            chunks = [r for r in all_results if r.get('source') == 'dense'][:top_k]
         
         logger.info(f"Retrieved {len(chunks)} chunks for query='{query[:50]}...'")
         return chunks

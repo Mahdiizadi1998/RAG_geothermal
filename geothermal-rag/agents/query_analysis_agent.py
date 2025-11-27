@@ -263,3 +263,9 @@ class QueryAnalysisAgent:
 def create_agent(config: Dict[str, Any]) -> QueryAnalysisAgent:
     """Factory function to create agent"""
     return QueryAnalysisAgent(config)
+
+
+# Alias for compatibility
+def create_query_analyzer(llm, config: Dict[str, Any]) -> QueryAnalysisAgent:
+    """Factory function with LLM parameter for compatibility"""
+    return QueryAnalysisAgent(config)

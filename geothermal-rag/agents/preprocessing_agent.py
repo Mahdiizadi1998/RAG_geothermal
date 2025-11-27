@@ -1,6 +1,6 @@
 """
-Preprocessing Agent - Multi-Strategy Text Chunking
-Implements different chunking strategies for different query types
+Preprocessing Agent - Advanced Semantic Chunking with Metadata Extraction
+Uses Ultimate Semantic Chunker with Late Chunking and Contextual Enrichment
 """
 
 import spacy
@@ -9,6 +9,10 @@ from typing import Dict, List, Tuple
 import logging
 import yaml
 from pathlib import Path
+
+# Import advanced components
+from agents.ultimate_semantic_chunker import create_chunker
+from agents.universal_metadata_extractor import create_metadata_extractor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,7 +53,20 @@ class PreprocessingAgent:
         
         self.chunking_config = self.config['chunking']
         
-        # Load spaCy for sentence segmentation
+        # Initialize Ultimate Semantic Chunker (replaces old RecursiveCharacterTextSplitter)
+        semantic_chunking_enabled = self.config.get('semantic_chunking', {}).get('enabled', True)
+        if semantic_chunking_enabled:
+            logger.info("🚀 Initializing Ultimate Semantic Chunker (Late Chunking + Contextual Enrichment)")
+            self.semantic_chunker = create_chunker(self.config.get('semantic_chunking', {}))
+        else:
+            logger.warning("⚠️  Semantic chunking disabled, using basic chunking")
+            self.semantic_chunker = None
+        
+        # Initialize Universal Metadata Extractor (replaces basic regex)
+        logger.info("🚀 Initializing Universal Metadata Extractor (spaCy NER + Regex)")
+        self.metadata_extractor = create_metadata_extractor({'use_spacy': True})
+        
+        # Load spaCy for sentence segmentation (fallback only)
         try:
             self.nlp = spacy.load('en_core_web_sm', disable=['ner', 'parser'])
             self.nlp.add_pipe('sentencizer')
@@ -59,7 +76,8 @@ class PreprocessingAgent:
     
     def process(self, documents: List[Dict]) -> Dict[str, List[Dict]]:
         """
-        Create fine-grained chunks from documents (excluding table content)
+        Create semantically-bounded chunks using Ultimate Semantic Chunker
+        Includes Late Chunking, Contextual Enrichment, and Universal Metadata Extraction
         
         Args:
             documents: List of document dicts from IngestionAgent
@@ -71,32 +89,62 @@ class PreprocessingAgent:
                 'doc_id': str,
                 'chunk_id': str,
                 'well_names': List[str],
-                'section_headers': List[str]
+                'metadata': Dict (wells, formations, depths, temperatures, pressures, etc.)
             }
         """
         all_chunks = {'fine_grained': []}
         
-        # Get fine_grained config
-        fine_config = self.chunking_config.get('fine_grained', {
-            'chunk_size': 500,
-            'chunk_overlap': 150
-        })
-        
         for doc in documents:
-            logger.info(f"Chunking document: {doc['filename']}")
+            logger.info(f"Processing document: {doc['filename']}")
             
-            # Extract section headers from full text
-            section_headers = self._extract_section_headers(doc['content'])
-            
-            # Create fine-grained chunks
-            chunks = self._create_chunks(
-                doc=doc,
-                section_headers=section_headers,
-                chunk_size=fine_config['chunk_size'],
-                chunk_overlap=fine_config['chunk_overlap']
-            )
-            all_chunks['fine_grained'].extend(chunks)
-            logger.info(f"  fine_grained: {len(chunks)} chunks, {len(section_headers)} section headers")
+            # Use Ultimate Semantic Chunker if enabled
+            if self.semantic_chunker:
+                logger.info("  Using Ultimate Semantic Chunker (Late Chunking + Contextual Enrichment)")
+                doc_dict = {
+                    'content': doc['content'],
+                    'filename': doc['filename'],
+                    'wells': doc['wells']
+                }
+                
+                # Chunk with semantic boundaries
+                chunks = self.semantic_chunker.chunk_document(doc_dict)
+                
+                # Enrich each chunk with universal metadata
+                logger.info(f"  Extracting metadata for {len(chunks)} chunks...")
+                # First extract document-level metadata
+                doc_metadata = self.metadata_extractor.extract_metadata(doc['content'])
+                # Then enrich chunks with it
+                enriched_chunks = self.metadata_extractor.enrich_chunks_with_metadata(
+                    chunks, 
+                    document_metadata=doc_metadata
+                )
+                
+                # Format for indexing
+                for i, chunk in enumerate(enriched_chunks):
+                    chunk['chunk_id'] = f"{doc['filename']}_semantic_{i}"
+                    chunk['doc_id'] = doc['filename']
+                    # Ensure well_names from document are preserved
+                    if 'well_names' not in chunk or not chunk['well_names']:
+                        chunk['well_names'] = doc['wells']
+                
+                all_chunks['fine_grained'].extend(enriched_chunks)
+                logger.info(f"  ✓ Created {len(enriched_chunks)} semantic chunks with metadata")
+            else:
+                # Fallback to old method
+                logger.warning("  Using fallback basic chunking (semantic chunking disabled)")
+                section_headers = self._extract_section_headers(doc['content'])
+                fine_config = self.chunking_config.get('fine_grained', {
+                    'chunk_size': 500,
+                    'chunk_overlap': 150
+                })
+                chunks = self._create_chunks(
+                    doc=doc,
+                    section_headers=section_headers,
+                    chunk_size=fine_config['chunk_size'],
+                    chunk_overlap=fine_config['chunk_overlap']
+                )
+                all_chunks['fine_grained'].extend(chunks)
+                logger.info(f"  ✓ Created {len(chunks)} basic chunks")
         
         return all_chunks
     

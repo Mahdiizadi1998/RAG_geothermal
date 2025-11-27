@@ -27,6 +27,29 @@ semantic_chunking:
   use_late_chunking: true    # Enable Jina AI-style late chunking
   use_contextual_enrichment: true  # Enable Anthropic-style context prepending
 
+# Universal Metadata Extraction (spaCy NER + Regex)
+metadata_extraction:
+  enabled: true
+  use_spacy: true            # Enable spaCy NER
+  spacy_model: "en_core_web_sm"
+  extract_entities:          # Entity types to extract
+    - wells
+    - depths
+    - measurements
+    - grades
+    - operators
+    - formations
+
+# Query Analysis & Routing
+query_analysis:
+  enabled: true
+  route_strategies:          # Available routing strategies
+    - hybrid                 # Dense + Sparse
+    - raptor                 # Hierarchical summaries
+    - graph                  # Knowledge graph traversal
+    - bm25                   # Sparse keyword only
+    - structured             # Database only
+
 # RAPTOR Tree Configuration
 raptor:
   enabled: true

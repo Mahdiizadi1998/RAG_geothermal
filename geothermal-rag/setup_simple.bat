@@ -140,14 +140,14 @@ if not exist "%PROJECT_ROOT%\geothermal-rag\chroma_db" mkdir "%PROJECT_ROOT%\geo
 echo [OK] Created chroma_db directory
 echo.
 
-REM Run tests
-echo Running system tests...
+REM Run integration tests for advanced components
+echo Running advanced RAG integration tests...
 cd /d "%PROJECT_ROOT%\geothermal-rag"
-python test_system.py
+python test_integration.py
 if errorlevel 1 (
-    echo [WARNING] Tests failed but continuing...
+    echo [WARNING] Integration tests failed but continuing...
 ) else (
-    echo [OK] All tests passed
+    echo [OK] All advanced components verified
 )
 echo.
 
@@ -176,17 +176,24 @@ if "%OLLAMA_INSTALLED%"=="0" (
 )
 
 echo ==========================================
-echo ADVANCED AGENTIC RAG SYSTEM:
+echo ADVANCED AGENTIC RAG SYSTEM - INTEGRATED
 echo ==========================================
 echo ✓ Models: llama3.1:8b ^(QA^), llava:7b ^(Vision^)
 echo ✓ Embeddings: all-MiniLM-L6-v2 ^(sentence-transformers^)
-echo ✓ Ultimate Semantic Chunker: Late Chunking + Context
-echo ✓ RAPTOR Tree: Hierarchical summarization ^(HDBSCAN^)
-echo ✓ Hybrid Retrieval: Dense + Sparse ^(BM25^) + Graph
-echo ✓ Reranking: Cross-encoder + RRF fusion
-echo ✓ Vision: Image captioning for plots/diagrams
-echo ✓ 8-core CPU, 16GB RAM optimized
-echo ✓ Expected: ~500ms queries, ~12GB peak memory
+echo.
+echo Advanced Components ^(8 total^):
+echo   1. Ultimate Semantic Chunker: Late Chunking + Context
+echo   2. Universal Metadata Extractor: spaCy NER + Regex
+echo   3. BM25 Retriever: Sparse keyword matching
+echo   4. Knowledge Graph: Document relationships
+echo   5. RAPTOR Tree: Hierarchical clustering ^(HDBSCAN^)
+echo   6. Vision Processor: Image captioning ^(llava:7b^)
+echo   7. Reranker: Cross-encoder + RRF fusion
+echo   8. Query Analyzer: Intelligent routing
+echo.
+echo Multi-Strategy Retrieval: Dense + Sparse + Graph + Hierarchical
+echo Hybrid Architecture: SQL ^(tables^) + Vectors ^(text^)
+echo Performance: ~500ms queries, ~12GB peak memory
 echo.
 
 echo Virtual environment: %VENV_DIR%

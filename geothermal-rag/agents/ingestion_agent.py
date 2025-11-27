@@ -9,6 +9,7 @@ import re
 from typing import Dict, List, Optional
 from pathlib import Path
 import logging
+from agents.vision_processor import create_vision_processor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,13 +36,23 @@ class IngestionAgent:
     - Extract document metadata (title, author, dates)
     """
     
-    def __init__(self, database_manager=None, table_parser=None):
+    def __init__(self, database_manager=None, table_parser=None, config=None):
         # Well name pattern for Dutch geothermal wells
         self.well_name_pattern = re.compile(r'\b([A-Z]{2,10}-GT-\d{2}(?:-S\d+)?)\b')
         
         # Database and table parser (optional - can be set later)
         self.db = database_manager
         self.table_parser = table_parser
+        self.config = config if isinstance(config, dict) else {}
+        
+        # Initialize vision processor for image captioning
+        self.vision_processor = None
+        if self.config.get('vision', {}).get('enabled', False):
+            try:
+                self.vision_processor = create_vision_processor(self.config.get('vision', {}))
+                logger.info("✓ Vision processor initialized for image extraction")
+            except Exception as e:
+                logger.warning(f"Vision processor initialization failed: {e}")
     
     def process(self, pdf_paths: List[str]) -> List[Dict]:
         """
@@ -96,19 +107,46 @@ class IngestionAgent:
             'mod_date': doc.metadata.get('modDate', '')
         }
         
-        # Extract full text
+        # Extract full text and images
         all_text = []
+        image_captions = []
         page_count = len(doc)  # Store page count before closing
         
         for page_num in range(page_count):
             page = doc[page_num]
             text = page.get_text()
             all_text.append(text)
+            
+            # Extract and caption images if vision processor enabled
+            if self.vision_processor:
+                try:
+                    images = page.get_images()
+                    for img_index, img in enumerate(images):
+                        xref = img[0]
+                        base_image = doc.extract_image(xref)
+                        image_bytes = base_image["image"]
+                        
+                        # Caption the image
+                        caption = self.vision_processor.caption_image(
+                            image_bytes,
+                            f"Geothermal well document, page {page_num + 1}"
+                        )
+                        
+                        if caption:
+                            image_caption_text = f"\n[IMAGE on page {page_num + 1}]: {caption}\n"
+                            image_captions.append(image_caption_text)
+                            logger.info(f"  ✓ Captioned image {img_index + 1} on page {page_num + 1}")
+                
+                except Exception as e:
+                    logger.warning(f"Failed to extract images from page {page_num + 1}: {e}")
         
         doc.close()
         
-        # Combine all text
+        # Combine all text and image captions
         full_text = '\n\n'.join(all_text)
+        if image_captions:
+            full_text += '\n\n=== IMAGE CAPTIONS ===\n' + '\n'.join(image_captions)
+            logger.info(f"  ✓ Added {len(image_captions)} image captions to document")
         
         # Check if we got any meaningful text
         if len(full_text.strip()) < 100:
@@ -123,7 +161,8 @@ class IngestionAgent:
             'content': full_text,
             'pages': page_count,
             'wells': well_names,
-            'metadata': metadata
+            'metadata': metadata,
+            'image_count': len(image_captions)
         }
     
     def _extract_well_names(self, text: str) -> List[str]:

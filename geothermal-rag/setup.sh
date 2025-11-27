@@ -122,11 +122,11 @@ echo "Creating necessary directories..."
 mkdir -p "$PROJECT_ROOT/geothermal-rag/chroma_db"
 echo "✓ Created chroma_db directory"
 
-# Run tests
+# Run integration tests for advanced components
 echo ""
-echo "Running system tests..."
+echo "Running advanced RAG integration tests..."
 cd "$PROJECT_ROOT/geothermal-rag"
-python test_system.py
+python test_integration.py
 
 echo ""
 echo "=========================================="
